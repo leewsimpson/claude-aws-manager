@@ -49,15 +49,20 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 **Goal:** Admins can create and manage cost centres — the organisational unit everything else hangs off.
 
-- [ ] API endpoints:
+- [x] API endpoints:
   - `POST /api/cost-centres` — create cost centre
   - `GET /api/cost-centres` — list all (admin sees all; devs see non-archived)
-  - `PATCH /api/cost-centres/{id}` — update (name, budget cap)
+  - `GET /api/cost-centres/{id}` — fetch one (archived hidden from non-admins)
+  - `PATCH /api/cost-centres/{id}` — update (name, description, budget cap)
   - `POST /api/cost-centres/{id}/archive` / `unarchive`
-  - `POST /api/cost-centres/{id}/owners` — assign CCO
-  - `DELETE /api/cost-centres/{id}/owners/{user_id}` — remove CCO
-- [ ] Frontend: Admin → Cost Centre management page (CRUD, assign owners)
-- [ ] Frontend: cost centre list visible to developers (for key request flow)
+  - `POST /api/cost-centres/{id}/owners` — assign CCO (grants `cco` role)
+  - `DELETE /api/cost-centres/{id}/owners/{user_id}` — remove CCO (strips `cco` if last)
+  - `GET /api/users` — admin-only, supports the owner-assignment picker
+- [x] First `audit_log` writer: reusable `app/core/audit.py::record_audit(...)`
+- [x] Frontend: Admin → Cost Centre management page (CRUD, assign owners) + role-gated `AppLayout` nav
+- [x] Frontend: cost centre list visible to developers (read-only, active-only)
+
+> **Deferred (no writers yet):** archiving a CC does not yet cascade-disable keys / auto-reject pending requests — wired in Phase 5/6 when those tables get writers.
 
 **Outputs:** Admins can create cost centres and assign owners. Foundation for key requests.
 

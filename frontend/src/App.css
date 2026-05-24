@@ -97,3 +97,244 @@
   font-size: 0.9rem;
   opacity: 0.85;
 }
+
+/* ---- Authenticated layout ---- */
+
+.layout {
+  min-height: 100vh;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  background-color: #ffffff;
+}
+
+.nav__brand {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.nav__links {
+  display: flex;
+  gap: 1rem;
+  flex: 1;
+}
+
+.nav__link {
+  color: #475569;
+  text-decoration: none;
+  font-size: 0.95rem;
+  padding: 0.25rem 0;
+  border-bottom: 2px solid transparent;
+}
+
+.nav__link.active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+}
+
+.nav__user {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.nav__username {
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.nav__logout {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* Wide page container for authenticated pages (overrides centred .page). */
+.page--wide {
+  display: block;
+  min-height: 0;
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.panel {
+  width: 100%;
+  text-align: left;
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel h1 {
+  font-size: 1.4rem;
+  margin-top: 0;
+}
+
+/* ---- Table ---- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: top;
+}
+
+.table th {
+  font-weight: 600;
+  color: #475569;
+}
+
+.table__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-transform: capitalize;
+}
+
+.badge--active {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+
+.badge--archived {
+  background-color: #e2e8f0;
+  color: #475569;
+}
+
+/* ---- Buttons ---- */
+
+.btn {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.4rem;
+  background-color: #ffffff;
+  color: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn--small {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.btn--danger {
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ---- Forms (authenticated, left-aligned) ---- */
+
+.form--inline {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+}
+
+.form__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.form__row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.form__row .form__field {
+  flex: 1;
+  min-width: 8rem;
+}
+
+.form--inline input,
+.form--inline select,
+.owners select {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.4rem;
+  font-size: 0.95rem;
+}
+
+/* ---- Owners panel ---- */
+
+.owners {
+  padding: 0.5rem 0;
+}
+
+.owners__title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.owners__list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.owners__list li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .nav {
+    background-color: #242424;
+    border-bottom-color: #3f3f46;
+  }
+  .table th,
+  .table td {
+    border-bottom-color: #3f3f46;
+  }
+  .form--inline {
+    border-color: #3f3f46;
+  }
+  .btn,
+  .nav__logout {
+    background-color: #2d2d2d;
+    border-color: #3f3f46;
+  }
+  .badge--archived {
+    background-color: #3f3f46;
+    color: #cbd5e1;
+  }
+}

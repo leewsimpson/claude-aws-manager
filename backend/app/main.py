@@ -10,7 +10,7 @@ In containers it is served on ``0.0.0.0:8000``.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, health
+from app.api import auth, cost_centres, health, users
 from app.config import get_settings
 
 settings = get_settings()
@@ -34,3 +34,5 @@ app.add_middleware(
 
 app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(cost_centres.router, prefix="/api")
+app.include_router(users.router, prefix="/api")

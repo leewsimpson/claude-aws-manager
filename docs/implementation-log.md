@@ -8,7 +8,7 @@ High-level progress tracker for the build. Complements [implementation-plan.md](
 |-------|-------|--------|
 | 1 | Project Scaffolding & Local Dev Environment | ✅ Done |
 | 2 | Database Models & Hard-Coded Auth | ✅ Done |
-| 3 | Cost Centre Management (Admin) | ⬜ Not started |
+| 3 | Cost Centre Management (Admin) | ✅ Done |
 | 4 | AWS Integration Layer (Mock Only) | ⬜ Not started |
 | 5 | Key Request & Approval Flow | ⬜ Not started |
 | 6 | Key Management & Developer Dashboard | ⬜ Not started |
@@ -166,3 +166,96 @@ Seed personas: `admin/admin` (admin), `dev1/dev1` & `dev2/dev2` (developer), `cc
 - `audit_log` table exists but nothing writes to it yet — Phase 3 (cost-centre create/archive/owner changes) is the first writer; establish a small audit helper there.
 - Add an Alembic-migration test (migrate up from empty matches models) per test-strategy L3 — not yet present.
 - New frontend pages should hang off the existing `AuthProvider`/`ProtectedRoute`/`api.ts`; gate admin UI on `hasRole('admin')`.
+
+---
+
+## Phase 3 — Cost Centre Management (Admin)
+
+**Goal:** Admins create/manage cost centres (the org unit everything hangs off) and assign CCOs. Developers see a read-only list of active cost centres (for the future key-request flow). Establishes the first `audit_log` writer.
+
+### Plan
+
+**No migration needed** — `cost_centres`, `cost_centre_owners`, `audit_log` all exist from Phase 2. Pure API + frontend + the first audit helper. Built by two parallel agents against a frozen API contract (same pattern as P1/P2), then orchestrator integrates (register router) + validates (pytest, build, live stack via curl).
+
+**Cost-centre API contract (frozen for both agents):** all routes require auth (bearer JWT).
+
+`CostCentre` response shape:
+```json
+{ "id": uuid, "code": "CC-1234", "name": str, "description": str|null,
+  "status": "active"|"archived", "budget_cap": number|null, "created_by": uuid,
+  "created_at": iso, "updated_at": iso,
+  "owners": [ { "user_id": uuid, "username": str, "display_name": str, "assigned_at": iso } ] }
+```
+
+- `POST /api/cost-centres` — **admin**. Body `{code, name, description?, budget_cap?}` → `201 CostCentre`. Dup code → `409`.
+- `GET /api/cost-centres` — auth. admin → all; non-admin → only `status='active'`. → `200 [CostCentre]`.
+- `GET /api/cost-centres/{id}` — auth. non-admin requesting archived → `404`. → `200 CostCentre`.
+- `PATCH /api/cost-centres/{id}` — **admin**. Body `{name?, description?, budget_cap?}` (code immutable) → `200 CostCentre`.
+- `POST /api/cost-centres/{id}/archive` | `/unarchive` — **admin** → `200 CostCentre`. No-op if already in target state (no dup audit row).
+- `POST /api/cost-centres/{id}/owners` — **admin**. Body `{user_id}` → `200 CostCentre`. Grants `cco` role if missing. Already-owner → `409`; unknown user → `404`.
+- `DELETE /api/cost-centres/{id}/owners/{user_id}` — **admin** → `200 CostCentre`. Strips `cco` role if the user owns no remaining CCs.
+- `GET /api/users` — **admin** (supporting endpoint for the owner picker). → `200 [{id, username, display_name, email, roles, is_active}]`.
+
+**Audit:** small reusable helper `app/core/audit.py` `record_audit(db, *, actor_id, action, entity_type, entity_id, old_values=None, new_values=None, ip_address=None)`. Actions emitted: `cost_centre.created`, `cost_centre.updated` (full old/new diff — covers budget too; doc enum is non-exhaustive), `cost_centre.archived`, `cost_centre.unarchived`, `cco.assigned`, `cco.removed`.
+
+**Deferred to their owning phases** (no writers exist yet): archive does **not** yet cascade-disable keys / auto-reject pending requests (Phase 5/6 own those tables). Documented as a known gap.
+
+**Frontend:** introduce a minimal `AppLayout` (role-gated nav: Home, Cost Centres) since the app outgrows the single centred card. `CostCentresPage` — table of cost centres; admins get create/edit/archive controls + an owners panel (assign via user picker, remove); developers get a read-only active-only list. TanStack Query hooks against the contract; MSW handlers + Vitest coverage. Hang off existing `AuthProvider`/`ProtectedRoute`/`api.ts`.
+
+### Progress
+
+- [x] Backend: schemas + audit helper + cost-centre router + `GET /api/users` + register in `main.py`
+- [x] Backend tests (RBAC, CRUD, archive/unarchive, owners, audit writes, dev scoping)
+- [x] Frontend: layout/nav + cost-centre page + hooks + MSW + Vitest
+- [x] Integration: pytest + build/vitest + live-stack curl verification
+
+### Decisions taken during build
+
+- **First `audit_log` writer = `app/core/audit.py::record_audit(...)`** — keyword-only, `db.add`s the row but does **not** commit (the request handler owns the transaction). Includes a `_jsonable` coercion (UUID→str, Decimal→float, datetime→isoformat) so JSONB `old/new_values` never choke on ORM types. Every later phase (keys, requests, settings) reuses this.
+- **`audit_log.ip_address` is Postgres `INET`** → a `_client_ip` guard parses `request.client.host` with `ipaddress.ip_address(...)` and stores `None` for non-IP hosts (e.g. the TestClient's `"testclient"`), rather than crashing on insert.
+- **PATCH emits `cost_centre.updated`** with an old/new diff of only the changed fields (covers budget changes too); the doc's `cost_centre.budget_updated` action is subsumed — the audit enum is explicitly non-exhaustive. No audit row written when nothing changed.
+- **archive/unarchive are no-ops when already in the target state** — no status write, no duplicate audit row.
+- **CCO role lifecycle is automatic:** assigning an owner grants the `cco` role (list **reassignment**, since SQLAlchemy doesn't track in-place `ARRAY` mutation); removing the owner strips `cco` **only if** the user owns no other cost centre. Other roles untouched.
+- **Supporting `GET /api/users`** (admin-only, `app/api/users.py`) added beyond the plan's endpoint list — the owner-assignment picker needs a user list to choose from.
+- **Frontend gained an `AppLayout`** (role-gated top nav: Home / Cost centres + user + logout) since the app outgrew the single centred card; authed pages now use a wider `.page--wide` container, login keeps the card.
+- **Deferred (no writers exist yet):** archiving a CC does **not** yet cascade-disable its keys or auto-reject pending requests — those tables/writers arrive in Phase 5/6. Known gap, revisit there.
+
+### What was built
+
+```
+backend/app/core/audit.py                first audit_log writer (record_audit + _jsonable)
+backend/app/schemas/cost_centre.py        CostCentre, OwnerSummary, Create/Update, OwnerAssign
+backend/app/schemas/user.py               UserListItem
+backend/app/api/cost_centres.py           8 endpoints (CRUD + archive/unarchive + owners)
+backend/app/api/users.py                  GET /api/users (admin)
+backend/app/main.py                        registers cost_centres + users routers
+backend/tests/test_cost_centres.py         13 cases (RBAC, CRUD, archive, owners, audit, scoping)
+frontend/src/components/AppLayout.tsx      role-gated nav + wide layout
+frontend/src/features/costCentres/{types,api}.ts   typed client + TanStack Query hooks
+frontend/src/pages/CostCentresPage.tsx     table + admin create/edit/archive + owners panel
+frontend/src/pages/CostCentresPage.test.tsx 6 Vitest cases
+frontend/src/{App.tsx,pages/HomePage.tsx,App.css,mocks/handlers.ts,test/setup.ts}  wired in
+```
+
+### Validation
+
+- Backend: **36 passed** (23 prior + 13 new), local Postgres on :5432.
+- Frontend: `npm run build` (tsc strict + vite) passes; **11 Vitest tests** pass (5 prior + 6 new).
+- Live stack (`docker compose up`, backend hot-reloaded the new routes): full curl sweep green — admin create + `409` dup; `dev1` create `403`, `dev1 GET /api/users` `403`, unauth list `401`; assign `dev2` owner → `dev2` gains `cco`; re-assign `409`; archive → invisible to `dev1` (list + `404` by id); unarchive + remove owner → `cco` stripped from `dev2`.
+
+### Retro
+
+**What went well**
+- Same two-parallel-agents-against-a-frozen-contract pattern (P1/P2) again integrated with zero interface drift — backend 36/36, frontend 11/11 on first orchestrator run. No migration this phase (tables already existed) made integration a pure router-registration + validation step.
+- `record_audit` landed as a clean reusable primitive on the first writer, exactly as the P2 carry-forward asked.
+
+**What bit us (and the lesson)**
+- **`INET` rejects non-IP hosts.** Storing `request.client.host` directly would crash under the TestClient (host = `"testclient"`). **Lesson: validate before writing to typed Postgres columns (`INET`, etc.); coerce invalid values to NULL.**
+- **Browser render still unverified** — Chrome extension not connected (as P1/P2). UI covered by build + RTL/MSW only; pixels unconfirmed.
+- The live curl sweep mutated the dev DB (left one stray active `CC-E2E-*` cost centre; `dev2` correctly back to `['developer']`). Harmless local test residue; re-seed is idempotent and won't remove it.
+
+**Carry-forward for Phase 4**
+- Reuse `record_audit` for every state change; pass `_client_ip(request)`.
+- When Phase 5/6 add key/request writers, wire the deferred archive cascade (disable keys, auto-reject pending requests on archive) and revisit `cost_centres` status transitions.
+- AWS layer (Phase 4) is mock-only and must sit behind the interface — no `boto3` in app code. Run the tech-spike "validate before you mock" items first.
+- Still missing the Alembic-migration test (migrate-up-from-empty matches models) flagged in P1/P2 — fold into a future phase.
