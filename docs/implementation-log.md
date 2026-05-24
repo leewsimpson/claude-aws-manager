@@ -9,7 +9,7 @@ High-level progress tracker for the build. Complements [implementation-plan.md](
 | 1 | Project Scaffolding & Local Dev Environment | ✅ Done |
 | 2 | Database Models & Hard-Coded Auth | ✅ Done |
 | 3 | Cost Centre Management (Admin) | ✅ Done |
-| 4 | AWS Integration Layer (Mock Only) | ⬜ Not started |
+| 4 | AWS Integration Layer (Mock Only) | ✅ Done |
 | 5 | Key Request & Approval Flow | ⬜ Not started |
 | 6 | Key Management & Developer Dashboard | ⬜ Not started |
 | 7 | Cost Tracking & Budget Enforcement | ⬜ Not started |
@@ -259,3 +259,93 @@ frontend/src/{App.tsx,pages/HomePage.tsx,App.css,mocks/handlers.ts,test/setup.ts
 - When Phase 5/6 add key/request writers, wire the deferred archive cascade (disable keys, auto-reject pending requests on archive) and revisit `cost_centres` status transitions.
 - AWS layer (Phase 4) is mock-only and must sit behind the interface — no `boto3` in app code. Run the tech-spike "validate before you mock" items first.
 - Still missing the Alembic-migration test (migrate-up-from-empty matches models) flagged in P1/P2 — fold into a future phase.
+
+---
+
+## Phase 4 — AWS Integration Layer (Mock Only)
+
+**Goal:** An abstracted AWS service layer (`app/services/aws/`) that every later phase calls instead of `boto3`, with a realistic in-memory mock. Backend-only — no frontend, no migration (the `inference_profiles`/`usage_snapshots` *tables* land with their owning phases; the mock keeps state in-memory). Real boto3 deferred to Phase 11.
+
+### "Validate before you mock" — status (honest gap)
+
+The plan asks to run tech-spike #1–#3 against real AWS *before* building the mock, so the mock's usage-data **shape and timing** mirror reality. **These were not run** — this environment is offline with no AWS account (the whole point of mock-first). The mock instead encodes the **documented** shape: the design-decisions "Resolved Questions" table + research/04 (CloudWatch `InputTokenCount`/`OutputTokenCount` per inference profile; invocation logs per IAM-user with input/output token counts + modelId). The usage-shape assumptions are therefore **flagged risks**, isolated in one module (`usage.py`) and one tunable (`base_tokens_per_minute`) so Phase 11 can reconcile against the spike with minimal blast radius. `tech-spike.md` status stays "Not yet tested".
+
+### Plan — built by two parallel agents against a frozen contract (P1–P3 pattern)
+
+**Module layout** `backend/app/services/aws/`:
+- `base.py` — `AwsService` ABC, dataclasses (`ProvisionedKey`, `TokenUsage`, `KeyUsage`, `InferenceProfileRef`), exceptions (`AwsServiceError` + `KeyNotFoundError`/`ProfileNotFoundError`/`DuplicateProfileError`), `UsageSimulatorProtocol`, and `build_model_policy(...)` (allowed_models → IAM policy doc, per Decision #3/#13 exact-ARN).
+- `mock.py` — `MockAwsService(AwsService)`: in-memory IAM-user/credential/profile state machine; composes a `UsageSimulator`; clock-injectable.
+- `usage.py` — `UsageSimulator`: deterministic, clock-driven, monotonic token accrual with pause/resume on disable/enable (transition-history integration so windowed `[start,end]` queries work). The riskiest assumption, isolated here.
+- `real.py` — `RealAwsService(AwsService)` stub; every method raises `NotImplementedError("Real AWS arrives in Phase 11")`.
+- `__init__.py` — `get_aws_service()` factory (lru_cache singleton so the in-memory mock persists across requests), wired to `settings.aws_mode` (`mock`→mock, `real`→stub, else ValueError). Exports the public API.
+
+**Frozen interface** (keyword-only, mirrors `record_audit` style). Signatures refined from the plan's indicative list and documented below:
+- `provision_key(*, iam_username, cost_centre_code, allowed_models, expiry_days) -> ProvisionedKey` — *added `cost_centre_code`* so the mock can resolve each allowed model to its CC+model inference profile (key↔profile↔CC graph drives realistic usage); *renamed `model_policy`→`allowed_models`* (the layer builds the IAM policy internally, symmetric with `update_model_policy`).
+- `revoke_key(*, iam_username, credential_id)`, `disable_key(*, credential_id)`, `enable_key(*, credential_id)`, `reset_key(*, credential_id) -> str` (new bearer token), `update_model_policy(*, iam_username, allowed_models)`.
+- `create_inference_profile(*, cost_centre_code, model_id) -> InferenceProfileRef` (arn+name; Phase 5 persists both), `delete_inference_profile(*, profile_arn)`.
+- `get_usage_metrics(*, profile_arn, start, end) -> TokenUsage` (CloudWatch CC-level, `key_id=NULL` path), `parse_invocation_logs(*, since) -> list[KeyUsage]` (per-IAM-user path).
+
+**Usage realism (Decision #2/#12):** keys accrue tokens while active at a per-key deterministic rate (hash of credential_id → stable ±variance) so different keys burn differently and *actually approach/cross limits*; disabled keys pause. Token split input/output/cache-read/cache-write by fixed plausible ratios (Claude Code = heavy cache reads). **Cost is NOT computed here** — the layer returns token counts only; cost = tokens × pricing arrives in Phase 7.
+
+- **Agent A (aws-core):** `base.py`, `mock.py`, `real.py`, `__init__.py` (factory).
+- **Agent B (aws-usage+tests):** `usage.py` (`UsageSimulator` impl of the frozen protocol) + `tests/test_aws_mock.py` (L2 suite: provision returns id+token once; disable/enable/reset/revoke transitions + error cases; policy built from exact model ARNs; profile create/dup/delete; usage accrues monotonically, pauses when disabled, windowed queries, per-key invocation logs; `AWS_MODE` factory routing incl. real-stub raises).
+- **Orchestrator (me):** wire imports, run `pytest`, fix integration, independent review pass, retro + doc updates.
+
+No dependency changes (clock injected, not `freezegun`) → no `--renew-anon-volumes` needed.
+
+### Progress
+
+- [x] Agent A (aws-core): `base.py` (ABC + dataclasses + exceptions + `build_model_policy`) + `mock.py` + `real.py` (stub) + `__init__.py` (factory)
+- [x] Agent B (aws-usage): `usage.py` (`UsageSimulator`) + `tests/test_aws_mock.py`
+- [x] Integrate + `pytest` green (**68 passed**; 36 prior + 32 AWS-mock L2)
+- [x] Orchestrator review pass + docs/retro
+
+### Decisions taken during build
+
+- **Module layout `app/services/aws/`**: `base.py` (interface + value objects + exceptions + `UsageSimulatorProtocol` + `build_model_policy`), `mock.py` (`MockAwsService`), `usage.py` (`UsageSimulator`), `real.py` (`RealAwsService` stub), `__init__.py` (`get_aws_service` factory + public exports). App code imports `get_aws_service`; **no `boto3` anywhere** (smoke-checked: `boto3` not in `sys.modules` after import).
+- **Factory is an `@lru_cache` singleton** so the in-memory mock's state survives across requests in the running app; usable directly as a FastAPI `Depends`. Tests construct `MockAwsService(clock=...)` directly for isolation.
+- **Interface signature refinements** (the plan's list was indicative): `provision_key(*, iam_username, cost_centre_code, allowed_models, expiry_days)` — added `cost_centre_code` so the mock resolves each model to its CC+model inference profile (the key↔profile↔CC graph that drives realistic usage); `model_policy`→`allowed_models` (the layer builds the IAM policy internally, symmetric with `update_model_policy`). Usage methods take an explicit `start`/`end` window; `create_inference_profile → InferenceProfileRef(arn, name)` (Phase 5 persists both). All methods keyword-only (matches `record_audit` house style).
+- **IAM policy built behind the interface** by `build_model_policy(allowed_models, ...)` — exact foundation-model ARNs, no wildcards (Decision #3/#13), mirroring design-decisions §3 (3 statements incl. `CallWithBearerToken` + inference-profile resolution). Mock stores the generated policy per key so behaviour is assertable now; real impl will `PutUserPolicy` the same doc in P11.
+- **Usage realism** (`UsageSimulator`, the riskiest assumption — isolated in one file + one tunable `base_tokens_per_minute`): per-key burn rate is a deterministic hash of `credential_id` (factor ∈ [0.5, 1.5]) so keys differ but reproduce; accrual integrates an append-only `(timestamp, active)` transition timeline so **disabled keys pause and resume cleanly** and arbitrary `[start, end]` windows are answerable; token split is fixed plausible ratios (input 25 / output 15 / cache-read 55 / cache-write 5 — Claude Code is cache-read heavy). **Cost is NOT computed here** — the layer returns token counts only; cost = tokens × pricing arrives in Phase 7.
+- **Multi-model attribution fix (orchestrator):** the first cut attributed a key's *full* burn to *each* allowed model, double-counting a multi-model key across the CloudWatch and invocation-log paths — a latent Phase-7 per-key-enforcement bug. Fixed to split a key's window burn **evenly across its models** (one profile per model), so per-key total = single window burn and each profile sees only its share. Locked with `test_multi_model_key_splits_burn_no_double_count`.
+- **No new dependencies, no migration:** the clock is injected (not `freezegun`), and the mock is in-memory (the `inference_profiles`/`usage_snapshots` *tables* still arrive in P5/P7). So **no `--renew-anon-volumes` dance and no Alembic change** this phase.
+
+### What was built
+
+```
+backend/app/services/__init__.py                  package marker
+backend/app/services/aws/base.py                  AwsService ABC, ProvisionedKey/TokenUsage/KeyUsage/
+                                                   InferenceProfileRef, AwsServiceError(+4 subclasses),
+                                                   UsageSimulatorProtocol, build_model_policy (exact-ARN)
+backend/app/services/aws/mock.py                   MockAwsService (in-memory key/profile state machine)
+backend/app/services/aws/usage.py                  UsageSimulator (deterministic, clock-driven accrual)
+backend/app/services/aws/real.py                   RealAwsService stub (NotImplementedError → Phase 11)
+backend/app/services/aws/__init__.py               get_aws_service() factory (lru_cache) + exports
+backend/tests/test_aws_mock.py                     32 L2 cases (pure/offline, controllable clock)
+```
+
+### Validation
+
+- Backend: **68 passed** (36 prior + 32 new AWS-mock L2), local Postgres on :5432; AWS-mock suite alone runs in ~0.1 s (no DB/network).
+- Smoke: `get_aws_service()` → `MockAwsService` singleton; `app.main` imports cleanly with the new package; **`boto3` not imported** anywhere.
+- L2 coverage: provision returns id+token once + distinct per user; dup username/profile, not-found, mismatch error paths; reset returns a new token; disable/enable idempotent + pause accrual; revoke removes state; exact-ARN policy (no `claude-sonnet-*` wildcard, includes `CallWithBearerToken` + `application-inference-profile/*`); profile create/dup/delete/recreate; usage zero→grows, windowed additivity/monotonicity, pause-on-disable (~60 vs ~90 active min), per-key invocation logs, no-profile-for-model yields nothing, two keys on one profile sum to the metric, multi-model split; factory routing incl. real-stub `NotImplementedError` + unknown-mode `ValueError`.
+
+### Retro
+
+**What went well**
+- The frozen-contract + parallel-agents pattern (P1–P3) adapted cleanly to a single-stream backend phase by splitting along a real seam: **aws-core** (interface + lifecycle state machine) vs **aws-usage** (the accrual engine + the whole L2 suite), joined by a frozen `UsageSimulatorProtocol`. Zero interface drift — aws-usage's tests went green against aws-core's files on first integration (68/68), and aws-usage even self-corrected a model-id constant against the real `base.py` mid-flight.
+- Isolating the riskiest assumption (synthetic usage shape) into one file + one tunable means Phase 11's real-AWS reconciliation has a small, well-labelled blast radius.
+- The accrual design (transition-timeline integration) made pause/resume and arbitrary windows fall out naturally and deterministically — exactly the clock-injected, no-wall-clock property the test-strategy demands.
+
+**What bit us (and the lesson)**
+- **"Validate before you mock" could not be honoured.** tech-spike #1–#3 need a live AWS account; this environment is offline by design. The mock encodes the *documented* shape, not measured reality, so the usage ratios/latency remain **unproven assumptions**. **Lesson: a mock-first build trades early UX feedback for the risk of baking in wrong AWS-behaviour assumptions — keep them isolated and labelled (done), and treat Phase 11 as a real reconciliation step, not a rubber-stamp.** `tech-spike.md` stays "Not yet tested".
+- **First-cut usage double-counted multi-model keys.** Caught in orchestrator review, not by the agents' tests (which only exercised single-model keys). **Lesson: when two derived data paths must agree (CloudWatch CC-level vs per-key logs), add an explicit cross-path consistency test for the *multi-* case, not just the 1:1 golden path.**
+- **Browser render N/A this phase** (backend-only) — the long-standing "pixels unverified" gap is untouched and still open for the frontend phases.
+
+**Carry-forward for Phase 5**
+- Inject the AWS layer via `Depends(get_aws_service)`; map `AwsServiceError` subclasses to HTTP (`DuplicateKeyError`→409, `KeyNotFoundError`→404, etc.) in the key-request/provisioning handlers.
+- Phase 5 owns the **order**: on approval, for each approved model `create_inference_profile(cc_code, model)` (persist `InferenceProfileRef.profile_arn`/`profile_name` to the new `inference_profiles` table) **before** `provision_key(...)`, so the mock can resolve `model_profiles` and usage attributes correctly. Add the `InferenceProfile` model + migration in P5 (per plan).
+- Reuse `record_audit` + `_client_ip` for every key/request state change; wire the **deferred archive cascade** (P3 gap: disable keys / auto-reject pending requests on CC archive) now that key writers exist.
+- The bearer token from `ProvisionedKey.bearer_token` is returned **once** in the API response and never persisted (Decision #10) — no token column; do not add one.
+- Usage-shape assumptions (ratios, rate, latency) live in `usage.py`/`base_tokens_per_minute` — tune so demo keys cross a $50/7-day rolling limit in a sensible wall-clock window once Phase 7 wires pricing; reconcile against the spike in Phase 11.
+- Still missing the Alembic migrate-up-from-empty test (flagged P1/P2/P3) — fold into P5 when the next migration lands.

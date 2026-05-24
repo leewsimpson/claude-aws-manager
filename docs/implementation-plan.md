@@ -74,20 +74,20 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 > **Validate before you mock.** Before building the mock, run the throwaway spikes in [tech-spike.md](tech-spike.md) (no app integration — raw AWS CLI/boto3) to confirm the *shape and timing* of the data the mock must imitate. Priorities: spike #1 (end-to-end provisioning + inference profile), spike #2 (CloudWatch metric latency/granularity — drives the polling-loop assumptions), spike #3 (invocation-log attribution shape). The mock's fake usage data should mirror what these spikes reveal, so UX feedback gathered against the mock holds up against real AWS.
 
-- [ ] Define AWS service interface (protocol/ABC):
-  - `provision_key(iam_username, model_policy, expiry_days) → (credential_id, bearer_token)`
+- [x] Define AWS service interface (protocol/ABC) — `app/services/aws/base.py::AwsService`. Signatures refined from this indicative list (documented in implementation-log Phase 4): `provision_key` takes `cost_centre_code` + `allowed_models` (layer builds the IAM policy; `model_policy`→`allowed_models`); usage methods take explicit `start`/`end` window; `create_inference_profile → InferenceProfileRef(arn, name)`:
+  - `provision_key(iam_username, cost_centre_code, allowed_models, expiry_days) → ProvisionedKey`
   - `revoke_key(iam_username, credential_id)`
   - `disable_key(credential_id)` / `enable_key(credential_id)`
   - `reset_key(credential_id) → new_bearer_token`
   - `update_model_policy(iam_username, allowed_models)`
-  - `create_inference_profile(cost_centre, model) → profile_arn`
+  - `create_inference_profile(cost_centre_code, model_id) → InferenceProfileRef`
   - `delete_inference_profile(profile_arn)`
-  - `get_usage_metrics(inference_profile_arn, period) → token_counts`
-  - `parse_invocation_logs(since) → per_key_usage` (for per-key attribution, see [design-decisions.md](design-decisions.md#12-per-key-usage-data-source))
-- [ ] Mock implementation: returns fake credential IDs/tokens, stores state in-memory
-- [ ] **Realistic mock usage data:** `get_usage_metrics` returns plausible token counts that accrue over time per active key/profile (so dashboards and budget enforcement are demoable and feel real — keys actually approach and cross their limits). Match the granularity/timing shape confirmed by tech-spike #2.
-- [ ] Config switch: `AWS_MODE=mock|real` environment variable (only `mock` is wired up until Phase 11)
-- [ ] Unit tests for mock layer
+  - `get_usage_metrics(profile_arn, start, end) → TokenUsage`
+  - `parse_invocation_logs(since) → list[KeyUsage]` (per-key attribution, see [design-decisions.md](design-decisions.md#12-per-key-usage-data-source))
+- [x] Mock implementation (`MockAwsService`): returns fake credential IDs/tokens, stores state in-memory; `RealAwsService` is a Phase-11 stub (raises `NotImplementedError`)
+- [x] **Realistic mock usage data:** `UsageSimulator` accrues plausible token counts over time per active key/profile (deterministic per-key rate, pause/resume on disable/enable, windowed CloudWatch + per-key invocation-log paths) so keys actually approach/cross limits. ⚠ tech-spike #2/#3 were **not** run (offline, no AWS account) — the usage *shape* is a documented assumption isolated in `usage.py`, to be reconciled in Phase 11.
+- [x] Config switch: `AWS_MODE=mock|real` via `get_aws_service()` factory (only `mock` wired up until Phase 11)
+- [x] Unit tests for mock layer (`tests/test_aws_mock.py`, 32 cases, pure/offline)
 
 **Outputs:** All AWS operations abstracted behind the interface; app code never calls boto3 directly. The whole app can now be built and demoed offline against the mock.
 
