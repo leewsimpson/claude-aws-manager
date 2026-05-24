@@ -2,6 +2,8 @@
 
 High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Each phase builds on the previous — dependencies flow top-down.
 
+**Mock-first strategy:** The entire app is built and demoed against the in-memory mock AWS layer (`AWS_MODE=mock`) first. The **real boto3 implementation is deferred to Phase 11** — everything before it runs fully local with no AWS account, no AWS cost, offline. This yields a clickable, end-to-end prototype at the **Phase 7 milestone** for early UX feedback, before any AWS integration work. The trade-off: a mock can bake in wrong assumptions about AWS behaviour (especially usage-data shape and timing), so the riskiest AWS assumptions are validated up front via a throwaway spike — see the "validate before you mock" note in Phase 4.
+
 ---
 
 ## Phase 1 — Project Scaffolding & Local Dev Environment
@@ -61,9 +63,11 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 ---
 
-## Phase 4 — AWS Integration Layer (Mock + Real)
+## Phase 4 — AWS Integration Layer (Mock Only)
 
-**Goal:** Abstracted AWS service layer that the rest of the app calls. Mock by default, real AWS behind a config flag.
+**Goal:** Abstracted AWS service layer that the rest of the app calls, with a realistic in-memory mock. The **real boto3 implementation is deferred to Phase 11** — everything between here and there is built and demoed against the mock.
+
+> **Validate before you mock.** Before building the mock, run the throwaway spikes in [tech-spike.md](tech-spike.md) (no app integration — raw AWS CLI/boto3) to confirm the *shape and timing* of the data the mock must imitate. Priorities: spike #1 (end-to-end provisioning + inference profile), spike #2 (CloudWatch metric latency/granularity — drives the polling-loop assumptions), spike #3 (invocation-log attribution shape). The mock's fake usage data should mirror what these spikes reveal, so UX feedback gathered against the mock holds up against real AWS.
 
 - [ ] Define AWS service interface (protocol/ABC):
   - `provision_key(iam_username, model_policy, expiry_days) → (credential_id, bearer_token)`
@@ -76,12 +80,11 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
   - `get_usage_metrics(inference_profile_arn, period) → token_counts`
   - `parse_invocation_logs(since) → per_key_usage` (for per-key attribution, see [design-decisions.md](design-decisions.md#12-per-key-usage-data-source))
 - [ ] Mock implementation: returns fake credential IDs/tokens, stores state in-memory
-- [ ] Real implementation: boto3 calls (IAM CreateUser, AttachUserPolicy, CreateServiceSpecificCredential, etc.)
-- [ ] Basic retry logic: wrap boto3 calls with exponential backoff (e.g., `tenacity` library)
-- [ ] Config switch: `AWS_MODE=mock|real` environment variable
+- [ ] **Realistic mock usage data:** `get_usage_metrics` returns plausible token counts that accrue over time per active key/profile (so dashboards and budget enforcement are demoable and feel real — keys actually approach and cross their limits). Match the granularity/timing shape confirmed by tech-spike #2.
+- [ ] Config switch: `AWS_MODE=mock|real` environment variable (only `mock` is wired up until Phase 11)
 - [ ] Unit tests for mock layer
 
-**Outputs:** All AWS operations abstracted. App code never calls boto3 directly.
+**Outputs:** All AWS operations abstracted behind the interface; app code never calls boto3 directly. The whole app can now be built and demoed offline against the mock.
 
 ---
 
@@ -165,6 +168,14 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 ---
 
+## ⭐ Milestone — Clickable Local Prototype (end of Phase 7)
+
+At this point the full core idea runs end-to-end, **completely local against the mock**: log in as any role → developer requests a key → CCO approves with constraints → token shown once with setup instructions → key appears on the developer dashboard → mock usage accrues → spend tracks against rolling/lifetime limits → key hard-stops when a limit or CC budget is exceeded.
+
+**This is the feedback checkpoint** — demo it, gather UX feedback on the request/approval flow, constraint model, and dashboards before investing in richer visualisations (Phase 8) or any real AWS work (Phase 11). Phases 8–10 polish and extend; none of them require AWS.
+
+---
+
 ## Phase 8 — Dashboards & Visualisations
 
 **Goal:** Rich dashboard views for CCOs and Admins with charts and breakdowns.
@@ -230,10 +241,14 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 ---
 
-## Phase 11 — Integration Testing & Polish
+## Phase 11 — Real AWS Implementation, Integration Testing & Polish
 
-**Goal:** Validate end-to-end against real AWS. Polish UX.
+**Goal:** Implement the real AWS backend behind the Phase 4 interface, validate end-to-end against real AWS, polish UX.
 
+- [ ] **Real AWS implementation** of the Phase 4 service interface: boto3 calls (IAM CreateUser, PutUserPolicy, CreateServiceSpecificCredential, CreateInferenceProfile, CloudWatch `get_metric_statistics`, invocation-log parsing, etc.)
+- [ ] Basic retry logic: wrap boto3 calls with exponential backoff (e.g., `tenacity` library)
+- [ ] Wire up `AWS_MODE=real` and confirm the full app works unchanged when switched from `mock` to `real`
+- [ ] Reconcile any mock/real divergence surfaced here against assumptions baked in earlier (esp. usage-data shape from the Phase 4 spike)
 - [ ] Integration test suite (pytest): runs against real AWS dev account
   - Provision a key, verify IAM user + policy created
   - Revoke a key, verify cleanup
@@ -250,6 +265,8 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 ## Dependency Graph
 
+All phases below run against the **mock** AWS layer. Real AWS arrives only in Phase 11.
+
 ```
 Phase 1  Scaffolding
    ↓
@@ -257,7 +274,7 @@ Phase 2  DB Models & Auth
    ↓
 Phase 3  Cost Centre Management ←──────────────────┐
    ↓                                                │
-Phase 4  AWS Integration Layer                      │
+Phase 4  AWS Integration Layer (mock only)          │
    ↓                                                │
 Phase 5  Key Request & Approval Flow ───────────────┘
    ↓
@@ -265,13 +282,15 @@ Phase 6  Key Management & Developer Dashboard
    ↓
 Phase 7  Cost Tracking & Budget Enforcement
    ↓
+══ ⭐ Clickable local prototype — FEEDBACK CHECKPOINT ══
+   ↓
 Phase 8  Dashboards & Visualisations
    ↓
 Phase 9  Budget Alerts & Global Policies
    ↓
 Phase 10 Lifecycle Automation & Audit
    ↓
-Phase 11 Integration Testing & Polish
+Phase 11 Real AWS Implementation, Integration Testing & Polish
 ```
 
 ---
