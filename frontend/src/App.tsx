@@ -4,6 +4,7 @@ import { ProtectedRoute } from './auth/ProtectedRoute'
 import { AppLayout } from './components/AppLayout'
 import { HomePage } from './pages/HomePage'
 import { CostCentresPage } from './pages/CostCentresPage'
+import { KeyRequestsPage } from './pages/KeyRequestsPage'
 import { LoginPage } from './pages/LoginPage'
 
 function App() {
@@ -26,6 +27,16 @@ function App() {
           <ProtectedRoute>
             <AppLayout>
               <CostCentresPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/key-requests"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <KeyRequestsPage />
             </AppLayout>
           </ProtectedRoute>
         }

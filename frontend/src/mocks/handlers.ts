@@ -3,9 +3,15 @@ import type {
   CostCentre,
   UserListItem,
 } from '../features/costCentres/types'
+import type {
+  KeyRequest,
+  KeyRequestResult,
+  ProvisionedKey,
+} from '../features/keyRequests/types'
 
 export const TEST_TOKEN = 'test-token-123'
 export const ADMIN_TOKEN = 'admin-token-456'
+export const CCO_TOKEN = 'cco-token-789'
 
 export const TEST_USER = {
   id: 1,
@@ -21,6 +27,14 @@ export const ADMIN_USER = {
   display_name: 'Administrator',
   email: 'admin@example.com',
   roles: ['admin'],
+}
+
+export const CCO_USER = {
+  id: 'u-ccowner1',
+  username: 'ccowner1',
+  display_name: 'Cost Centre Owner One',
+  email: 'ccowner1@example.com',
+  roles: ['cco', 'developer'],
 }
 
 // Users available for the owner picker.
@@ -102,9 +116,88 @@ function isAdmin(request: Request): boolean {
   return request.headers.get('Authorization') === `Bearer ${ADMIN_TOKEN}`
 }
 
+function isCco(request: Request): boolean {
+  return request.headers.get('Authorization') === `Bearer ${CCO_TOKEN}`
+}
+
 function isAuthed(request: Request): boolean {
   const auth = request.headers.get('Authorization')
-  return auth === `Bearer ${TEST_TOKEN}` || auth === `Bearer ${ADMIN_TOKEN}`
+  return (
+    auth === `Bearer ${TEST_TOKEN}` ||
+    auth === `Bearer ${ADMIN_TOKEN}` ||
+    auth === `Bearer ${CCO_TOKEN}`
+  )
+}
+
+function getRequestingUserId(request: Request): string {
+  const auth = request.headers.get('Authorization')
+  if (auth === `Bearer ${ADMIN_TOKEN}`) return String(ADMIN_USER.id)
+  if (auth === `Bearer ${CCO_TOKEN}`) return String(CCO_USER.id)
+  return String(TEST_USER.id)
+}
+
+// ---- Key request store ----
+
+let nextKeyRequestId = 1
+let keyRequests: KeyRequest[] = []
+
+function seedKeyRequests(): KeyRequest[] {
+  return []
+}
+
+export function resetKeyRequestStore() {
+  nextKeyRequestId = 1
+  keyRequests = seedKeyRequests()
+}
+resetKeyRequestStore()
+
+/** Directly inject a pending request into the store so reviewer tests don't
+ *  need a two-render setup. Returns the seeded request. */
+export function seedPendingKeyRequest(overrides?: Partial<KeyRequest>): KeyRequest {
+  const cc = costCentres[0]!
+  const id = `kr-seed-${nextKeyRequestId++}`
+  const now = '2026-05-24T10:00:00Z'
+  const req: KeyRequest = {
+    id,
+    developer_id: String(TEST_USER.id),
+    developer_username: TEST_USER.username,
+    developer_display_name: TEST_USER.display_name,
+    cost_centre_id: cc.id,
+    cost_centre_code: cc.code,
+    cost_centre_name: cc.name,
+    status: 'pending',
+    justification: null,
+    rejection_reason: null,
+    reviewed_by: null,
+    reviewed_at: null,
+    approved_constraints: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  }
+  keyRequests = [...keyRequests, req]
+  return req
+}
+
+function makeProvisionedKey(request: KeyRequest, allowedModels: string[]): ProvisionedKey {
+  return {
+    id: `key-${nextKeyRequestId}`,
+    cost_centre_id: request.cost_centre_id,
+    cost_centre_code: request.cost_centre_code,
+    iam_username: `claude-${request.developer_username}-${request.cost_centre_code.toLowerCase()}`,
+    status: 'active',
+    allowed_models: allowedModels,
+    rolling_limit: null,
+    rolling_period_days: null,
+    lifetime_budget: null,
+    expires_at: null,
+    bearer_token: `mock-bearer-token-${request.id}`,
+    inference_profiles: allowedModels.map((m) => ({
+      model_id: m,
+      profile_arn: `arn:aws:bedrock:ap-southeast-2:123456789:inference-profile/${request.cost_centre_code.toLowerCase()}-${m.replace(/\./g, '-')}`,
+      profile_name: `${request.cost_centre_code}-${m}`,
+    })),
+  }
 }
 
 const unauthorised = () =>
@@ -133,6 +226,13 @@ export const handlers = [
         user: ADMIN_USER,
       })
     }
+    if (username === 'ccowner1' && password === 'ccowner1') {
+      return HttpResponse.json({
+        access_token: CCO_TOKEN,
+        token_type: 'bearer',
+        user: CCO_USER,
+      })
+    }
     return HttpResponse.json({ detail: 'Invalid credentials' }, { status: 401 })
   }),
 
@@ -143,6 +243,9 @@ export const handlers = [
     }
     if (auth === `Bearer ${ADMIN_TOKEN}`) {
       return HttpResponse.json({ ...ADMIN_USER, is_active: true })
+    }
+    if (auth === `Bearer ${CCO_TOKEN}`) {
+      return HttpResponse.json({ ...CCO_USER, is_active: true })
     }
     return unauthorised()
   }),
@@ -268,5 +371,142 @@ export const handlers = [
     if (!cc) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
     cc.owners = cc.owners.filter((o) => o.user_id !== params.userId)
     return HttpResponse.json(cc)
+  }),
+
+  // ---- Key requests ----
+
+  http.get('/api/key-requests', ({ request }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const url = new URL(request.url)
+    const statusFilter = url.searchParams.get('status')
+    const userId = getRequestingUserId(request)
+    const isReviewer = isAdmin(request) || isCco(request)
+
+    let visible = isReviewer
+      ? keyRequests
+      : keyRequests.filter((r) => String(r.developer_id) === userId)
+
+    if (statusFilter) {
+      visible = visible.filter((r) => r.status === statusFilter)
+    }
+    return HttpResponse.json(visible)
+  }),
+
+  http.get('/api/key-requests/:id', ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const req = keyRequests.find((r) => r.id === params.id)
+    if (!req) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    return HttpResponse.json(req)
+  }),
+
+  http.post('/api/key-requests', async ({ request }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const body = (await request.json()) as {
+      cost_centre_id: string
+      justification?: string
+    }
+    const userId = getRequestingUserId(request)
+    const isCcoUser = isCco(request)
+    const userObj = isCco(request) ? CCO_USER : isAdmin(request) ? ADMIN_USER : TEST_USER
+
+    const cc = costCentres.find((c) => c.id === body.cost_centre_id)
+    if (!cc) return HttpResponse.json({ detail: 'Cost centre not found' }, { status: 404 })
+
+    // Conflict: already an active/pending request for this developer + cc
+    const existing = keyRequests.find(
+      (r) =>
+        String(r.developer_id) === userId &&
+        r.cost_centre_id === body.cost_centre_id &&
+        (r.status === 'pending' || r.status === 'approved'),
+    )
+    if (existing) {
+      return HttpResponse.json(
+        { detail: 'Active or pending request already exists' },
+        { status: 409 },
+      )
+    }
+
+    const id = `kr-${nextKeyRequestId++}`
+    const now = new Date().toISOString()
+    // CCO auto-approve own requests
+    const autoApprove = isCcoUser && cc.owners.some((o) => String(o.user_id) === userId)
+    const newRequest: KeyRequest = {
+      id,
+      developer_id: userId,
+      developer_username: userObj.username,
+      developer_display_name: userObj.display_name,
+      cost_centre_id: cc.id,
+      cost_centre_code: cc.code,
+      cost_centre_name: cc.name,
+      status: autoApprove ? 'approved' : 'pending',
+      justification: body.justification ?? null,
+      rejection_reason: null,
+      reviewed_by: autoApprove ? userId : null,
+      reviewed_at: autoApprove ? now : null,
+      approved_constraints: autoApprove
+        ? { allowed_models: ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5'], rolling_limit: null, rolling_period_days: null, lifetime_budget: null, expiry_days: null }
+        : null,
+      created_at: now,
+      updated_at: now,
+    }
+    keyRequests = [...keyRequests, newRequest]
+
+    const result: KeyRequestResult = {
+      request: newRequest,
+      key: autoApprove ? makeProvisionedKey(newRequest, ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5']) : null,
+    }
+    return HttpResponse.json(result, { status: 201 })
+  }),
+
+  http.post('/api/key-requests/:id/approve', async ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    if (!isAdmin(request) && !isCco(request)) return forbidden()
+    const req = keyRequests.find((r) => r.id === params.id)
+    if (!req) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const body = (await request.json()) as {
+      allowed_models?: string[]
+      rolling_limit?: number
+      rolling_period_days?: number
+      lifetime_budget?: number
+      expiry_days?: number
+    }
+    const reviewerId = getRequestingUserId(request)
+    const now = new Date().toISOString()
+    const allowedModels = body.allowed_models ?? ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5']
+
+    req.status = 'approved'
+    req.reviewed_by = reviewerId
+    req.reviewed_at = now
+    req.approved_constraints = {
+      allowed_models: allowedModels,
+      rolling_limit: body.rolling_limit ?? null,
+      rolling_period_days: body.rolling_period_days ?? null,
+      lifetime_budget: body.lifetime_budget ?? null,
+      expiry_days: body.expiry_days ?? null,
+    }
+    req.updated_at = now
+
+    const key = makeProvisionedKey(req, allowedModels)
+    const result: KeyRequestResult = { request: req, key }
+    return HttpResponse.json(result)
+  }),
+
+  http.post('/api/key-requests/:id/reject', async ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    if (!isAdmin(request) && !isCco(request)) return forbidden()
+    const req = keyRequests.find((r) => r.id === params.id)
+    if (!req) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const body = (await request.json()) as { rejection_reason: string }
+    const reviewerId = getRequestingUserId(request)
+    const now = new Date().toISOString()
+
+    req.status = 'rejected'
+    req.reviewed_by = reviewerId
+    req.reviewed_at = now
+    req.rejection_reason = body.rejection_reason
+    req.updated_at = now
+
+    const result: KeyRequestResult = { request: req, key: null }
+    return HttpResponse.json(result)
   }),
 ]

@@ -316,6 +316,93 @@
   gap: 0.6rem;
 }
 
+/* ---- Key request status badges ---- */
+
+.badge--pending {
+  background-color: #fef9c3;
+  color: #854d0e;
+}
+
+.badge--approved {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+
+.badge--rejected {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+
+/* ---- TokenReveal panel ---- */
+
+.token-reveal {
+  padding: 1rem;
+  border: 2px solid #f59e0b;
+  border-radius: 0.5rem;
+  background-color: #fffbeb;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.token-reveal__warning {
+  color: #92400e;
+  font-size: 0.95rem;
+}
+
+.token-reveal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.token-reveal__label {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.token-reveal__copy-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.token-reveal__code {
+  font-family: monospace;
+  font-size: 0.85rem;
+  background-color: #f1f5f9;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.3rem;
+  word-break: break-all;
+}
+
+.token-reveal__pre {
+  font-family: monospace;
+  font-size: 0.85rem;
+  background-color: #f1f5f9;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.3rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+/* ---- Textarea in forms ---- */
+
+.form--inline textarea {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.4rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
 @media (prefers-color-scheme: dark) {
   .nav {
     background-color: #242424;
@@ -336,5 +423,21 @@
   .badge--archived {
     background-color: #3f3f46;
     color: #cbd5e1;
+  }
+  .token-reveal {
+    background-color: #1c1a11;
+    border-color: #d97706;
+  }
+  .token-reveal__warning {
+    color: #fbbf24;
+  }
+  .token-reveal__code,
+  .token-reveal__pre {
+    background-color: #2d2d2d;
+  }
+  .form--inline textarea {
+    background-color: #2d2d2d;
+    border-color: #3f3f46;
+    color: inherit;
   }
 }

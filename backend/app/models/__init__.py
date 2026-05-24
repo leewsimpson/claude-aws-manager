@@ -8,6 +8,7 @@ from app.models.audit_log import AuditLog
 from app.models.cost_centre import CostCentre
 from app.models.cost_centre_owner import CostCentreOwner
 from app.models.global_setting import GlobalSetting
+from app.models.inference_profile import InferenceProfile
 from app.models.key import Key
 from app.models.key_request import KeyRequest
 from app.models.user import User
@@ -17,6 +18,7 @@ __all__ = [
     "CostCentre",
     "CostCentreOwner",
     "GlobalSetting",
+    "InferenceProfile",
     "Key",
     "KeyRequest",
     "User",

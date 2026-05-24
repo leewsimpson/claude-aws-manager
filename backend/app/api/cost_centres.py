@@ -7,6 +7,7 @@ hidden from non-admins). First feature to write the ``audit_log``.
 
 import ipaddress
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -17,6 +18,8 @@ from app.core.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.models.cost_centre import CostCentre as CostCentreModel
 from app.models.cost_centre_owner import CostCentreOwner
+from app.models.key import Key
+from app.models.key_request import KeyRequest
 from app.models.user import User
 from app.schemas.cost_centre import (
     CostCentre,
@@ -25,6 +28,7 @@ from app.schemas.cost_centre import (
     OwnerAssign,
     OwnerSummary,
 )
+from app.services.aws import AwsService, KeyNotFoundError, get_aws_service
 
 router = APIRouter(prefix="/cost-centres", tags=["cost-centres"])
 
@@ -199,11 +203,76 @@ def archive_cost_centre(
     request: Request,
     db: Session = Depends(get_db),
     actor: User = Depends(require_roles("admin")),
+    aws: AwsService = Depends(get_aws_service),
 ) -> CostCentre:
-    """Archive a cost centre (admin only). No-op if already archived."""
+    """Archive a cost centre (admin only). No-op if already archived.
+
+    Cascade effects:
+    - All pending key requests for this CC are set to rejected.
+    - All active/stopped keys for this CC are revoked via AWS, then marked
+      revoked in the DB (KeyNotFoundError is swallowed — key may be gone).
+    """
     cc = _get_cc_or_404(db, cc_id)
     if cc.status != "archived":
         cc.status = "archived"
+        now = datetime.now(timezone.utc)
+
+        # Reject pending requests
+        pending_requests = db.scalars(
+            select(KeyRequest).where(
+                KeyRequest.cost_centre_id == cc.id,
+                KeyRequest.status == "pending",
+            )
+        ).all()
+        for kr in pending_requests:
+            kr.status = "rejected"
+            kr.rejection_reason = "Cost centre archived"
+            kr.reviewed_by = actor.id
+            kr.reviewed_at = now
+            record_audit(
+                db,
+                actor_id=actor.id,
+                action="key.rejected",
+                entity_type="key_request",
+                entity_id=kr.id,
+                new_values={
+                    "status": "rejected",
+                    "rejection_reason": "Cost centre archived",
+                    "reviewed_by": actor.id,
+                },
+                ip_address=_client_ip(request),
+            )
+
+        # Revoke active/stopped keys
+        active_keys = db.scalars(
+            select(Key).where(
+                Key.cost_centre_id == cc.id,
+                Key.status.in_(["active", "stopped"]),
+            )
+        ).all()
+        for key in active_keys:
+            try:
+                aws.revoke_key(
+                    iam_username=key.iam_username,
+                    credential_id=key.credential_id,
+                )
+            except KeyNotFoundError:
+                pass  # already gone on the AWS side — still mark revoked
+            key.status = "revoked"
+            key.revoked_at = now
+            record_audit(
+                db,
+                actor_id=actor.id,
+                action="key.revoked",
+                entity_type="key",
+                entity_id=key.id,
+                new_values={
+                    "status": "revoked",
+                    "reason": "Cost centre archived",
+                },
+                ip_address=_client_ip(request),
+            )
+
         record_audit(
             db,
             actor_id=actor.id,

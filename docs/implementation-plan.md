@@ -97,25 +97,29 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 **Goal:** End-to-end key lifecycle — request, approve/reject, provision, display token.
 
-- [ ] API endpoints:
+- [x] API endpoints:
   - `POST /api/key-requests` — developer submits request (select cost centre, justification)
   - `GET /api/key-requests` — list requests (scoped: dev sees own, CCO sees their CCs, admin sees all)
   - `POST /api/key-requests/{id}/approve` — CCO/admin approves (with constraints: models, rolling limit, lifetime budget, expiry)
   - `POST /api/key-requests/{id}/reject` — CCO/admin rejects (with reason)
   - Auto-approval logic: if requester is CCO of the target cost centre, skip approval
-- [ ] `InferenceProfile` model (id, cost_centre_id, model_id, profile_arn, profile_name, status) — provisioning needs to persist profiles created on approval
-- [ ] On approval → for each approved model, ensure a CC+model inference profile exists (create via AWS layer + persist if not) → call AWS layer to provision key → store credential_id + iam_username in DB → return bearer token (once)
-- [ ] Validation: one active key per developer per cost centre
-- [ ] Audit log entries for all state transitions
-- [ ] Frontend — Developer:
+- [x] `InferenceProfile` model (id, cost_centre_id, model_id, profile_arn, profile_name, status) — provisioning needs to persist profiles created on approval
+- [x] On approval → for each approved model, ensure a CC+model inference profile exists (create via AWS layer + persist if not) → call AWS layer to provision key → store credential_id + iam_username in DB → return bearer token (once)
+- [x] Validation: one active key per developer per cost centre
+- [x] Audit log entries for all state transitions
+- [x] Frontend — Developer:
   - "Request Key" flow (select CC, enter justification)
   - Pending request status view
   - Token display on approval (copy-to-clipboard, setup instructions)
-- [ ] Frontend — CCO:
+- [x] Frontend — CCO:
   - Pending requests list for their cost centres
   - Approve modal (set constraints) / Reject modal (enter reason)
-- [ ] Frontend — Admin:
-  - All pending requests view, bulk approve/reject
+- [x] Frontend — Admin:
+  - All pending requests view (scoped to all CCs). _Bulk approve/reject deferred — single-request actions only for now._
+
+> **Done beyond plan:** wired the **CC-archive cascade** (auto-reject pending requests + revoke active keys via the AWS layer) — the P3/P4 carry-forward. Added the **Alembic migrate-up-from-empty test** (P1/P2/P3 carry-forward).
+>
+> **Resolved during build:** provision-on-approval; the bearer token is returned **once** in the approve/auto-approve response. The developer-obtains-own-token recovery path is Phase-6 regenerate.
 
 **Outputs:** Full request→approval→provisioning flow. Developer gets a bearer token and setup instructions.
 

@@ -10,7 +10,7 @@ High-level progress tracker for the build. Complements [implementation-plan.md](
 | 2 | Database Models & Hard-Coded Auth | ✅ Done |
 | 3 | Cost Centre Management (Admin) | ✅ Done |
 | 4 | AWS Integration Layer (Mock Only) | ✅ Done |
-| 5 | Key Request & Approval Flow | ⬜ Not started |
+| 5 | Key Request & Approval Flow | ✅ Done |
 | 6 | Key Management & Developer Dashboard | ⬜ Not started |
 | 7 | Cost Tracking & Budget Enforcement | ⬜ Not started |
 | 8 | Dashboards & Visualisations | ⬜ Not started |
@@ -349,3 +349,104 @@ backend/tests/test_aws_mock.py                     32 L2 cases (pure/offline, co
 - The bearer token from `ProvisionedKey.bearer_token` is returned **once** in the API response and never persisted (Decision #10) — no token column; do not add one.
 - Usage-shape assumptions (ratios, rate, latency) live in `usage.py`/`base_tokens_per_minute` — tune so demo keys cross a $50/7-day rolling limit in a sensible wall-clock window once Phase 7 wires pricing; reconcile against the spike in Phase 11.
 - Still missing the Alembic migrate-up-from-empty test (flagged P1/P2/P3) — fold into P5 when the next migration lands.
+
+---
+
+## Phase 5 — Key Request & Approval Flow
+
+**Goal:** End-to-end key lifecycle — developer requests → CCO/admin approves with constraints (or auto-approval) → AWS layer provisions → bearer token shown **once**. First writers for `key_requests`, `keys`, `inference_profiles`. Closes the long-deferred CC-archive cascade.
+
+### Key design decision (resolved from design.md §4.1 + plan)
+
+**Provision on approval.** The approve / auto-approve response carries the bearer token **once** (`ProvisionedKey.bearer_token`); nothing is stored (Decision #10 — no token column). The clean single-actor demo path is **auto-approval**: a CCO requesting a key for a CC they own is created already `approved` and provisioned inline, so they see the token immediately. When a *different* CCO/admin approves a developer's request, the token is surfaced to the approver; the developer-obtains-own-token recovery path is Phase-6 regenerate (not built here). This matches design.md §4.1 (`P-->>Dev: Display token once`) and the data-model auto-approval rule.
+
+### Plan — two parallel agents against a frozen contract (P1–P4 pattern)
+
+**Frozen API contract** (under `/api/key-requests`, all auth'd). Mutating/listing responses use an envelope `{ "request": KeyRequest, "key": ProvisionedKey | null }`.
+
+`KeyRequest` response: `{id, developer_id, developer_username, developer_display_name, cost_centre_id, cost_centre_code, cost_centre_name, status, justification, rejection_reason, reviewed_by, reviewed_at, approved_constraints, created_at, updated_at}`.
+
+`ProvisionedKey` response (token shown once): `{id, cost_centre_id, cost_centre_code, iam_username, status, allowed_models, rolling_limit, rolling_period_days, lifetime_budget, expires_at, bearer_token, inference_profiles:[{model_id, profile_arn, profile_name}]}`.
+
+- `POST /api/key-requests` — body `{cost_centre_id, justification?}`. 404 if CC missing/archived (non-admin); 409 if dev already has an active/stopped key **or** a pending request for that CC. If requester is a CCO of the target CC → auto-approve + provision with `global_settings` defaults → `201 {request(approved), key}`; else create pending → `201 {request(pending), key:null}`.
+- `GET /api/key-requests?status=` — scoped: developer=own; CCO=requests for CCs they own (∪ own); admin=all. → `200 [KeyRequest]`.
+- `GET /api/key-requests/{id}` — same visibility (else 404). → `200 KeyRequest`.
+- `POST /api/key-requests/{id}/approve` — **admin or CCO-of-that-CC**. Body `{allowed_models?, rolling_limit?, rolling_period_days?, lifetime_budget?, expiry_days?}` (omitted → `global_settings` default; `allowed_models` must be ⊆ global allowed). 409 if not pending or dev already has an active key. Provisions → `200 {request, key}`.
+- `POST /api/key-requests/{id}/reject` — admin/CCO-of-CC. Body `{rejection_reason}`. 409 if not pending → `200 {request, key:null}`.
+
+**Provisioning order (per P4 carry-forward, in a `provisioning` service):** resolve constraints → for each allowed model ensure an active `InferenceProfile` for (CC, model) (query; if missing `aws.create_inference_profile` + persist) → `aws.provision_key(iam_username=claude-{username}-{cc_code}, cost_centre_code, allowed_models, expiry_days)` → persist `keys` row (copy constraints to typed cols, `expires_at=now+expiry_days`) → set `key_request` approved/reviewed_by/reviewed_at/approved_constraints → audit `key.approved` + `key.provisioned` → commit. Map `AwsServiceError` subclasses to HTTP (`DuplicateKeyError`→409). One-active-key enforced by the partial unique index + pre-check (IntegrityError→409).
+
+**Archive cascade (closes P3/P4 gap):** on `POST /cost-centres/{id}/archive` → auto-reject pending `key_requests` for that CC (`key.rejected`, reason "Cost centre archived") + revoke active/stopped `keys` via `aws.revoke_key` (status `revoked`, `revoked_at`, audit `key.revoked`). Inject `Depends(get_aws_service)`.
+
+**New model + migration:** `InferenceProfile` (`app/models/inference_profile.py`: id, cost_centre_id FK, model_id, profile_arn unique, profile_name, status, created_at — **no** `updated_at`/TimestampMixin per data-model). Partial unique index `uq_inference_profiles_cc_model` on `(cost_centre_id, model_id) WHERE status='active'`. Register in `models/__init__.py`. Hand-authored Alembic migration (`down_revision=57f0fe8dd206`). **Also adds the long-flagged migrate-up-from-empty test** (P1/P2/P3 carry-forward).
+
+- **Agent A (backend):** model + migration + schemas + `provisioning.py` service + `api/key_requests.py` + archive-cascade in `cost_centres.py` + register in `main.py` + `tests/test_key_requests.py` + `tests/test_migrations.py`. Runs pytest.
+- **Agent B (frontend):** `features/keyRequests/{types,api}.ts` + role-adaptive `KeyRequestsPage` (developer request form + own-requests status list + token reveal w/ copy + setup instructions; CCO/admin pending list + approve modal (constraints) / reject modal (reason)) + nav link + `App.tsx` route + MSW handlers + Vitest. Runs build + vitest.
+- **Orchestrator (me):** verify migration applies on the live DB, register/run full pytest + build + vitest, live curl sweep, review pass, retro + docs.
+
+### Progress
+
+- [x] Agent A (backend): model + migration + schemas + provisioning + API + archive cascade + tests
+- [x] Agent B (frontend): feature client + page + token reveal + nav/route + MSW + Vitest
+- [x] Integrate: migration applied (live DB at `a1b2c3d4e5f6`), full pytest + build + vitest green
+- [x] Orchestrator review pass + live curl sweep + docs/retro
+
+### Decisions taken during build
+
+- **Provision-on-approval; token returned once in the response** (matches design.md §4.1). `KeyRequestResult = {request, key}`; `key` (with `bearer_token`) is non-null only on the provisioning responses (auto-approve, approve). Lists/GET never carry the token (verified live — no `bearer_token` field leaks into `GET /key-requests`). No token column added.
+- **Auto-approval = requester is a CCO of the target CC** (via `cost_centre_owners`), not merely holding the `cco` role. Created already `approved`, `reviewed_by = requester`, provisioned inline with `global_settings` defaults.
+- **Constraint resolution** (`_resolve_constraints`): start from `global_settings` (`allowed_models`, `default_rolling_limit.{amount,period_days}`, `default_lifetime_budget`, `default_key_expiry_days`), apply approve-time overrides; reject (400) any `allowed_models` not ⊆ the global allowed set.
+- **`InferenceProfile` model has only `created_at`** (no `TimestampMixin`/`updated_at`, per data-model). Partial unique index `uq_inference_profiles_cc_model` on `(cost_centre_id, model_id) WHERE status='active'`.
+- **Migration is hand-authored** (`a1b2c3d4e5f6`, `down_revision=57f0fe8dd206`) — not autogenerated (avoids the P2 dirty-DB footgun). `sa.UUID()`/`sa.text('now()')` idioms; partial index via `postgresql_where`.
+- **Provisioning order** lives in `app/services/provisioning.py::provision_for_request` — look-up-or-create one active `InferenceProfile` per model **then** `aws.provision_key`, persist the `Key`, audit `key.provisioned`; no commit (router owns the txn, flushes for generated ids). `iam_username = f"claude-{username}-{cc_code}".lower()`.
+- **Archive cascade wired (closes the P3/P4 gap):** `archive_cost_centre` now injects the AWS layer; on active→archived it auto-rejects pending requests (`key.rejected`) and revokes active/stopped keys via `aws.revoke_key` (`key.revoked`, swallowing `KeyNotFoundError`). Approved *requests* stay `approved` (it's their *keys* that are revoked).
+- **AWS error mapping:** `DuplicateKeyError`→409, other `AwsServiceError`→502. One-active-key enforced by pre-check + the partial unique index.
+- **Frontend token survival:** the reviewer-side `TokenReveal` is lifted to page state so it survives the TanStack-Query list invalidation that removes the just-approved row. Approve modal's model checkboxes use a `DEFAULT_MODEL_OPTIONS` constant mirroring the seed `allowed_models` (a real settings endpoint arrives in Phase 9); leaving all unticked sends no `allowed_models` (backend applies defaults).
+- **Long-flagged Alembic test added** (`tests/test_migrations.py`, P1/P2/P3 carry-forward): migrate-up-from-empty on a throwaway DB → assert all 8 tables → downgrade to base. Redirects `env.py` via `DATABASE_URL` + `get_settings.cache_clear()`. Marked `@pytest.mark.slow` (marker registered in `pyproject.toml`); `path_separator = os` added to `alembic.ini` to silence the alembic deprecation warning.
+
+### What was built
+
+```
+backend/app/models/inference_profile.py            InferenceProfile (created_at only; partial unique index)
+backend/app/models/__init__.py                     + InferenceProfile import/__all__
+backend/alembic/versions/a1b2c3d4e5f6_*.py          phase-5 migration (inference_profiles)
+backend/app/schemas/key_request.py                  ApprovalConstraints, KeyRequestCreate/Reject,
+                                                    InferenceProfileRefOut, KeyRequestOut,
+                                                    ProvisionedKeyOut, KeyRequestResult
+backend/app/services/provisioning.py                provision_for_request (profiles→key→audit)
+backend/app/api/key_requests.py                     POST / GET (scoped) / GET{id} / approve / reject
+backend/app/api/cost_centres.py                     archive cascade (reject pending + revoke keys)
+backend/app/main.py                                 register key_requests router
+backend/tests/test_key_requests.py                  22 L3 cases
+backend/tests/test_migrations.py                    migrate-up-from-empty round trip
+frontend/src/features/keyRequests/{types,api}.ts    typed client + TanStack hooks
+frontend/src/components/TokenReveal.tsx             one-time token + setup instructions (copy)
+frontend/src/pages/KeyRequestsPage.tsx              role-adaptive request/approve/reject + token
+frontend/src/pages/KeyRequestsPage.test.tsx         11 Vitest cases
+frontend/src/{App.tsx,components/AppLayout.tsx,App.css,mocks/handlers.ts,test/setup.ts}  wired in
+```
+
+### Validation
+
+- Backend: **90 passed**, **0 warnings** (68 prior + 22 key-request L3; the migration round-trip counts within). Migration applied to the live dev DB (`alembic current` → `a1b2c3d4e5f6 (head)`).
+- Frontend: `npm run build` (tsc strict + vite, 93 modules) clean; **22 Vitest tests** pass (11 prior + 11 new).
+- **Live stack curl/Python sweep (`:8000`) — all green:** ccowner1 auto-approval → 201 + token + both CC profiles created; dev1 → pending; dev1 approve attempt → 403; admin approve with overrides (haiku-only, rolling_limit 25, expiry 30) → 200 + token; dev1 list → own-only, **no `bearer_token`** field; duplicate request → 409; invalid model on approve → 400; archive cascade → pending request rejected (approved requests retained, their keys revoked).
+
+### Retro
+
+**What went well**
+- The P1–P4 frozen-contract + two-parallel-agents pattern held at larger scope: backend (model+migration+API+cascade+tests) and frontend (client+page+token+tests) integrated with **zero interface drift** — both green on the orchestrator's first full run, and the live sweep passed first try. The `{request, key}` envelope made "token shown once, only on provisioning" fall out cleanly on both sides.
+- Resolving the token-handoff ambiguity from the canonical `design.md` §4.1 **before** freezing the contract avoided a mid-build redesign — auto-approval is the clean single-actor demo path.
+- Closed three long-standing carry-forwards in one phase: the CC-archive cascade (open since P3) and the Alembic migrate-up-from-empty test (open since P1).
+
+**What bit us (and the lesson)**
+- **Orchestrator curl sweep wasted a run on a shell-quoting typo** (a stray `»` glyph aborted variable assignment; the "duplicate" check then returned 422-on-empty-UUID, not the real 409). **Lesson: for multi-step authed API sweeps, drive them from a stdlib Python script (urllib) rather than chained `curl`+inline-python — the quoting/escaping surface in bash is where the bug was, not the app.** Re-run via script passed cleanly.
+- **Browser render still unverified** — Chrome extension not connected (as P1–P3). The key-request UI, `TokenReveal` copy button and setup-instruction snippets are covered by build + RTL/MSW only; pixels unconfirmed. Long-standing gap, now spanning every frontend phase.
+- Live sweep left residual dev-DB rows (an archived `CC-P5B-*`, its revoked keys). Harmless local residue, consistent with P3; the idempotent seed won't remove it.
+
+**Carry-forward for Phase 6**
+- Phase 6 (Key Management & Developer Dashboard) builds `GET /api/keys` (scoped), `revoke`, `regenerate`, `PATCH constraints`. **The developer-obtains-own-token recovery path lands here** via `regenerate` (`aws.reset_key`) — Phase 5 only surfaces the token to whoever performs the provisioning action.
+- Reuse `provision_for_request`'s patterns; reuse `record_audit` + `_client_ip` (now duplicated in `cost_centres.py` and `key_requests.py` — consider factoring `_client_ip` into a shared `app/core` helper in P6).
+- `key.stopped`/`key.restarted` audit actions and `lifetime_spend` updates are Phase 7 (budget enforcement) — `keys.lifetime_spend` currently seeds at 0 and nothing updates it yet.
+- The archive cascade now revokes keys but there's no UI to *see* revoked keys until the Phase 6 dashboard — verify the cascade visually once `GET /api/keys` exists.
+- `usage_snapshots`/`pricing_cache` tables still deferred to Phase 7; `inference_profiles` now exists and is populated on approval.
