@@ -23,6 +23,8 @@ _EXPECTED_TABLES = {
     "audit_log",
     "global_settings",
     "inference_profiles",
+    "usage_snapshots",
+    "pricing_cache",
 }
 
 

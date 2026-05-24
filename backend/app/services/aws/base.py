@@ -172,6 +172,33 @@ def build_model_policy(
 class AwsService(ABC):
     """Interface for provisioning and governing Bedrock API Keys."""
 
+    # -- rehydration (concrete no-ops so RealAwsService inherits them) --------
+
+    def rehydrate_profile(
+        self,
+        *,
+        cost_centre_code: str,
+        model_id: str,
+        profile_arn: str,
+        profile_name: str,
+    ) -> None:
+        """Re-populate in-memory profile state from the DB on startup. No-op by default."""
+
+    def rehydrate_key(
+        self,
+        *,
+        credential_id: str,
+        iam_username: str,
+        cost_centre_code: str,
+        allowed_models: list[str],
+        model_profiles: dict[str, str],
+        provisioned_at: datetime,
+        active: bool,
+    ) -> None:
+        """Re-populate in-memory key state from the DB on startup. No-op by default."""
+
+    # -- abstract interface ---------------------------------------------------
+
     @abstractmethod
     def provision_key(
         self,

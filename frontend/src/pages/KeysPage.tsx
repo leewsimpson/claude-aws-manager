@@ -5,6 +5,8 @@ import { useKeys, useRevokeKey, useRegenerateKey, useUpdateKeyConstraints } from
 import type { Key, KeyStatus, UpdateKeyConstraintsInput } from '../features/keys/types'
 import type { ProvisionedKey } from '../features/keyRequests/types'
 import { TokenReveal } from '../components/TokenReveal'
+import { useKeyUsage, useCostCentreUsage, useUsageSummary } from '../features/usage/api'
+import type { UsageSnapshot } from '../features/usage/types'
 
 // Default model options — mirrors the seed allowed_models for the mock AWS service.
 const DEFAULT_MODEL_OPTIONS = [
@@ -35,6 +37,57 @@ function formatLimits(key: Key): string {
     parts.push(`${formatCurrency(key.lifetime_budget)} lifetime`)
   }
   return parts.length > 0 ? parts.join('; ') : 'None'
+}
+
+// Returns 0–1 fill ratio clamped to [0, 1].
+function spendRatio(spend: number, limit: number | null): number {
+  if (limit === null || limit <= 0) return 0
+  return Math.min(spend / limit, 1)
+}
+
+// Returns the CSS modifier for the meter fill based on ratio.
+function meterMod(ratio: number): string {
+  if (ratio >= 1) return 'meter__fill--danger'
+  if (ratio >= 0.8) return 'meter__fill--warn'
+  return ''
+}
+
+// Derive a human-readable reason why a stopped key was stopped.
+function stoppedReason(key: Key): string {
+  if (key.rolling_limit !== null && key.rolling_spend >= key.rolling_limit) {
+    return 'Stopped — rolling limit reached'
+  }
+  if (key.lifetime_budget !== null && key.lifetime_spend >= key.lifetime_budget) {
+    return 'Stopped — lifetime budget reached'
+  }
+  return 'Stopped — cost-centre budget reached'
+}
+
+// Compact progress bar showing spend vs. limit.
+function SpendMeter({
+  spend,
+  limit,
+  label,
+}: {
+  spend: number
+  limit: number | null
+  label: string
+}) {
+  const ratio = spendRatio(spend, limit)
+  const mod = meterMod(ratio)
+  return (
+    <div className="meter">
+      <div className="meter__bar" role="progressbar" aria-valuenow={spend} aria-valuemax={limit ?? 0} aria-label={label}>
+        <div
+          className={`meter__fill ${mod}`}
+          style={{ width: limit !== null ? `${ratio * 100}%` : '0%' }}
+        />
+      </div>
+      <span className="meter__label">
+        {formatCurrency(spend)}{limit !== null ? ` / ${formatCurrency(limit)}` : ''}
+      </span>
+    </div>
+  )
 }
 
 export function KeysPage() {
@@ -125,6 +178,7 @@ function DeveloperKeyCard({
   onRegenerated: (key: ProvisionedKey) => void
 }) {
   const [panel, setPanel] = useState<'none' | 'revoke' | 'setup'>('none')
+  const [usageOpen, setUsageOpen] = useState(false)
   const revoke = useRevokeKey()
   const regenerate = useRegenerateKey()
   const [revokeError, setRevokeError] = useState<string | null>(null)
@@ -157,6 +211,10 @@ function DeveloperKeyCard({
   }
 
   const canAct = keyData.status === 'active' || keyData.status === 'stopped'
+  const isStopped = keyData.status === 'stopped'
+
+  const hasRollingBudget = keyData.rolling_limit !== null && keyData.rolling_period_days !== null
+  const hasLifetimeBudget = keyData.lifetime_budget !== null
 
   return (
     <div className="key-card">
@@ -195,6 +253,17 @@ function DeveloperKeyCard({
         )}
       </div>
 
+      {/* Stopped key banner */}
+      {isStopped && (
+        <div className="key-card__stopped-banner" role="alert">
+          {stoppedReason(keyData)}
+          <p className="key-card__stopped-note">
+            Usage is updated approximately every 2 minutes. The key will resume automatically
+            when rolling spend falls below the limit, or when a budget is increased.
+          </p>
+        </div>
+      )}
+
       <div className="key-card__meta">
         <div className="key-card__meta-row">
           <span className="key-card__label">Models</span>
@@ -204,22 +273,42 @@ function DeveloperKeyCard({
               : '—'}
           </span>
         </div>
+
+        {/* Rolling spend / limit */}
         <div className="key-card__meta-row">
-          <span className="key-card__label">Rolling limit</span>
-          <span className="key-card__value">
-            {keyData.rolling_limit !== null && keyData.rolling_period_days !== null
-              ? `${formatCurrency(keyData.rolling_limit)} / ${keyData.rolling_period_days} days`
-              : '—'}
-          </span>
+          <span className="key-card__label">Rolling spend</span>
+          {hasRollingBudget ? (
+            <span className="key-card__value">
+              <SpendMeter
+                spend={keyData.rolling_spend}
+                limit={keyData.rolling_limit}
+                label={`Rolling spend: ${formatCurrency(keyData.rolling_spend)} of ${formatCurrency(keyData.rolling_limit)} over ${keyData.rolling_period_days} days`}
+              />
+              <span className="meter__label" style={{ marginTop: '0.1rem', display: 'block' }}>
+                / {keyData.rolling_period_days} days
+              </span>
+            </span>
+          ) : (
+            <span className="key-card__value">{formatCurrency(keyData.rolling_spend)} (no limit)</span>
+          )}
         </div>
+
+        {/* Lifetime spend / budget */}
         <div className="key-card__meta-row">
-          <span className="key-card__label">Lifetime budget</span>
-          <span className="key-card__value">
-            {keyData.lifetime_budget !== null
-              ? `${formatCurrency(keyData.lifetime_spend)} of ${formatCurrency(keyData.lifetime_budget)} spent (live usage tracking arrives in Phase 7)`
-              : '—'}
-          </span>
+          <span className="key-card__label">Lifetime spend</span>
+          {hasLifetimeBudget ? (
+            <span className="key-card__value">
+              <SpendMeter
+                spend={keyData.lifetime_spend}
+                limit={keyData.lifetime_budget}
+                label={`Lifetime spend: ${formatCurrency(keyData.lifetime_spend)} of ${formatCurrency(keyData.lifetime_budget)}`}
+              />
+            </span>
+          ) : (
+            <span className="key-card__value">{formatCurrency(keyData.lifetime_spend)} (no budget)</span>
+          )}
         </div>
+
         <div className="key-card__meta-row">
           <span className="key-card__label">Expires</span>
           <span className="key-card__value">{formatDate(keyData.expires_at)}</span>
@@ -228,6 +317,21 @@ function DeveloperKeyCard({
           <span className="key-card__label">Created</span>
           <span className="key-card__value">{formatDate(keyData.created_at)}</span>
         </div>
+      </div>
+
+      {/* Recent usage (collapsible) */}
+      <div className="key-card__usage">
+        <button
+          type="button"
+          className="key-card__usage-toggle"
+          onClick={() => setUsageOpen((v) => !v)}
+          aria-expanded={usageOpen}
+        >
+          {usageOpen ? '▾' : '▸'} Recent usage
+        </button>
+        {usageOpen && (
+          <KeyUsagePanel keyId={keyData.id} />
+        )}
       </div>
 
       {regenError && (
@@ -283,6 +387,56 @@ function DeveloperKeyCard({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function KeyUsagePanel({ keyId }: { keyId: string }) {
+  const { data, isLoading, isError } = useKeyUsage(keyId)
+
+  if (isLoading) {
+    return <p className="status status--loading key-card__usage-list">Loading usage…</p>
+  }
+  if (isError || !data) {
+    return <p className="status status--error key-card__usage-list">Unable to load usage.</p>
+  }
+  if (data.snapshots.length === 0) {
+    return <p className="key-card__usage-list" style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>No usage snapshots yet.</p>
+  }
+
+  // Show most-recent first, cap at 10.
+  const recent = [...data.snapshots]
+    .sort((a, b) => b.period_start.localeCompare(a.period_start))
+    .slice(0, 10)
+
+  return (
+    <div className="key-card__usage-list">
+      <table className="table" style={{ marginTop: 0 }}>
+        <thead>
+          <tr>
+            <th>Period</th>
+            <th>Model</th>
+            <th>Input tokens</th>
+            <th>Output tokens</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {recent.map((snap: UsageSnapshot, i: number) => (
+            <tr key={i}>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
+                {formatDate(snap.period_start)}
+              </td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
+                {snap.model_id}
+              </td>
+              <td>{snap.input_tokens.toLocaleString('en-AU')}</td>
+              <td>{snap.output_tokens.toLocaleString('en-AU')}</td>
+              <td style={{ fontFamily: 'var(--font-mono)' }}>{formatCurrency(snap.cost)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -362,6 +516,7 @@ function ReviewerKeysSection() {
               <th>Cost centre</th>
               <th>Status</th>
               <th>Limits</th>
+              <th>Spend</th>
               <th>Expires</th>
               <th>Actions</th>
             </tr>
@@ -373,6 +528,16 @@ function ReviewerKeysSection() {
           </tbody>
         </table>
       )}
+
+      {/* CC usage summary panel — shown when a CC filter is active */}
+      {ccFilter && (
+        <CostCentreUsageSummary ccId={ccFilter} />
+      )}
+
+      {/* Admin-only global usage summary */}
+      {isAdmin && (
+        <AdminUsageSummary />
+      )}
     </>
   )
 }
@@ -381,6 +546,9 @@ function ReviewerKeyRow({ keyData }: { keyData: Key }) {
   const [panel, setPanel] = useState<'none' | 'revoke' | 'edit'>('none')
 
   const canAct = keyData.status !== 'revoked'
+
+  const hasRollingBudget = keyData.rolling_limit !== null
+  const hasLifetimeBudget = keyData.lifetime_budget !== null
 
   return (
     <>
@@ -395,6 +563,29 @@ function ReviewerKeyRow({ keyData }: { keyData: Key }) {
           <span className={`badge badge--${keyData.status}`}>{keyData.status}</span>
         </td>
         <td>{formatLimits(keyData)}</td>
+        <td>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '8rem' }}>
+            {hasRollingBudget && (
+              <SpendMeter
+                spend={keyData.rolling_spend}
+                limit={keyData.rolling_limit}
+                label={`Rolling: ${formatCurrency(keyData.rolling_spend)} / ${formatCurrency(keyData.rolling_limit)}`}
+              />
+            )}
+            {hasLifetimeBudget && (
+              <SpendMeter
+                spend={keyData.lifetime_spend}
+                limit={keyData.lifetime_budget}
+                label={`Lifetime: ${formatCurrency(keyData.lifetime_spend)} / ${formatCurrency(keyData.lifetime_budget)}`}
+              />
+            )}
+            {!hasRollingBudget && !hasLifetimeBudget && (
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                R: {formatCurrency(keyData.rolling_spend)} / L: {formatCurrency(keyData.lifetime_spend)}
+              </span>
+            )}
+          </div>
+        </td>
         <td>{formatDate(keyData.expires_at)}</td>
         <td className="table__actions">
           {canAct && (
@@ -419,7 +610,7 @@ function ReviewerKeyRow({ keyData }: { keyData: Key }) {
       </tr>
       {panel === 'revoke' && (
         <tr>
-          <td colSpan={6}>
+          <td colSpan={7}>
             <ReviewerRevokePanel
               keyData={keyData}
               onDone={() => setPanel('none')}
@@ -429,7 +620,7 @@ function ReviewerKeyRow({ keyData }: { keyData: Key }) {
       )}
       {panel === 'edit' && (
         <tr>
-          <td colSpan={6}>
+          <td colSpan={7}>
             <EditConstraintsPanel
               keyData={keyData}
               onDone={() => setPanel('none')}
@@ -438,6 +629,161 @@ function ReviewerKeyRow({ keyData }: { keyData: Key }) {
         </tr>
       )}
     </>
+  )
+}
+
+// ---- Cost centre usage summary (CCO/admin when CC filter active) ----
+
+function CostCentreUsageSummary({ ccId }: { ccId: string }) {
+  const { data, isLoading } = useCostCentreUsage(ccId)
+
+  if (isLoading || !data) return null
+
+  const budgetRatio = spendRatio(data.total_spend, data.budget_cap)
+
+  return (
+    <div className="usage-summary">
+      <p className="usage-summary__title">Cost centre spend — {data.cost_centre_code}</p>
+      <div className="usage-summary__stat-row">
+        <div className="usage-summary__stat">
+          <span className="usage-summary__stat-label">Total spend</span>
+          <span className="usage-summary__stat-value">{formatCurrency(data.total_spend)}</span>
+        </div>
+        <div className="usage-summary__stat">
+          <span className="usage-summary__stat-label">Budget cap</span>
+          <span className="usage-summary__stat-value">{formatCurrency(data.budget_cap)}</span>
+        </div>
+      </div>
+
+      {data.budget_cap !== null && (
+        <div style={{ marginBottom: '1rem' }}>
+          <SpendMeter
+            spend={data.total_spend}
+            limit={data.budget_cap}
+            label={`Total spend ${formatCurrency(data.total_spend)} of budget ${formatCurrency(data.budget_cap)}`}
+          />
+          {budgetRatio >= 0.8 && (
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.82rem', color: budgetRatio >= 1 ? 'var(--danger)' : 'var(--warn)' }}>
+              {budgetRatio >= 1 ? 'Budget cap reached.' : 'Approaching budget cap.'}
+            </p>
+          )}
+        </div>
+      )}
+
+      {data.by_model.length > 0 && (
+        <>
+          <p className="usage-summary__title" style={{ marginBottom: '0.5rem' }}>By model</p>
+          <table className="table" style={{ marginTop: 0 }}>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Total tokens</th>
+                <th>Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.by_model.map((m) => (
+                <tr key={m.model_id}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>{m.model_id}</td>
+                  <td>{m.total_tokens.toLocaleString('en-AU')}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>{formatCurrency(m.cost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---- Admin usage summary ----
+
+function AdminUsageSummary() {
+  const { data, isLoading } = useUsageSummary()
+
+  if (isLoading || !data) return null
+
+  return (
+    <div className="usage-summary">
+      <p className="usage-summary__title">Organisation usage summary</p>
+      <div className="usage-summary__stat-row">
+        <div className="usage-summary__stat">
+          <span className="usage-summary__stat-label">Total spend</span>
+          <span className="usage-summary__stat-value">{formatCurrency(data.total_spend)}</span>
+        </div>
+        <div className="usage-summary__stat">
+          <span className="usage-summary__stat-label">Active keys</span>
+          <span className="usage-summary__stat-value">{data.active_keys}</span>
+        </div>
+        <div className="usage-summary__stat">
+          <span className="usage-summary__stat-label">Stopped keys</span>
+          <span className="usage-summary__stat-value" style={{ color: data.stopped_keys > 0 ? 'var(--warn)' : 'inherit' }}>
+            {data.stopped_keys}
+          </span>
+        </div>
+      </div>
+
+      {data.cost_centres.length > 0 && (
+        <>
+          <p className="usage-summary__title" style={{ marginBottom: '0.5rem' }}>By cost centre</p>
+          <table className="table" style={{ marginTop: 0 }}>
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Name</th>
+                <th>Spend vs budget</th>
+                <th>Active</th>
+                <th>Stopped</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.cost_centres.map((cc) => (
+                <tr key={cc.cost_centre_id}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>{cc.code}</td>
+                  <td>{cc.name}</td>
+                  <td>
+                    <SpendMeter
+                      spend={cc.total_spend}
+                      limit={cc.budget_cap}
+                      label={`${cc.code}: ${formatCurrency(cc.total_spend)} / ${formatCurrency(cc.budget_cap)}`}
+                    />
+                  </td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>{cc.active_keys}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', color: cc.stopped_keys > 0 ? 'var(--warn)' : 'inherit' }}>
+                    {cc.stopped_keys}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {data.by_model.length > 0 && (
+        <>
+          <p className="usage-summary__title" style={{ margin: '1rem 0 0.5rem' }}>By model</p>
+          <table className="table" style={{ marginTop: 0 }}>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Total tokens</th>
+                <th>Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.by_model.map((m) => (
+                <tr key={m.model_id}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>{m.model_id}</td>
+                  <td>{m.total_tokens.toLocaleString('en-AU')}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>{formatCurrency(m.cost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
   )
 }
 

@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -27,9 +28,11 @@ from app.models.cost_centre_owner import CostCentreOwner
 from app.models.global_setting import GlobalSetting
 from app.models.inference_profile import InferenceProfile
 from app.models.key import Key
+from app.models.usage_snapshot import UsageSnapshot
 from app.models.user import User
 from app.schemas.key import KeyConstraintsUpdate, KeyOut
 from app.schemas.key_request import InferenceProfileRefOut, ProvisionedKeyOut
+from app.schemas.usage import KeyUsageOut, UsageSnapshotOut
 from app.services.aws import AwsService, AwsServiceError, KeyNotFoundError, get_aws_service
 from app.services.provisioning import compensate_aws
 
@@ -79,6 +82,24 @@ def _global_allowed_models(db: Session) -> list[str]:
     return []
 
 
+def _rolling_spend(db: Session, key: Key, now: datetime) -> float:
+    """Return the rolling-window spend for a key (invocation_log rows only).
+
+    Returns 0.0 if ``rolling_period_days`` is not set on the key.
+    """
+    if key.rolling_period_days is None:
+        return 0.0
+    window_start = now - timedelta(days=key.rolling_period_days)
+    raw = db.scalar(
+        select(func.coalesce(func.sum(UsageSnapshot.cost), 0)).where(
+            UsageSnapshot.key_id == key.id,
+            UsageSnapshot.source == "invocation_log",
+            UsageSnapshot.period_start >= window_start,
+        )
+    )
+    return float(raw) if raw is not None else 0.0
+
+
 def _serialise_key(db: Session, key: Key) -> KeyOut:
     """Build KeyOut by joining developer + cost centre and looking up inference profiles."""
     developer = db.get(User, key.developer_id)
@@ -103,6 +124,7 @@ def _serialise_key(db: Session, key: Key) -> KeyOut:
                 )
             )
 
+    now = datetime.now(timezone.utc)
     return KeyOut(
         id=key.id,
         developer_id=key.developer_id,
@@ -116,6 +138,7 @@ def _serialise_key(db: Session, key: Key) -> KeyOut:
         allowed_models=list(key.allowed_models),
         rolling_limit=float(key.rolling_limit) if key.rolling_limit is not None else None,
         rolling_period_days=key.rolling_period_days,
+        rolling_spend=_rolling_spend(db, key, now),
         lifetime_budget=float(key.lifetime_budget) if key.lifetime_budget is not None else None,
         lifetime_spend=float(key.lifetime_spend) if key.lifetime_spend is not None else 0.0,
         expires_at=key.expires_at,
@@ -470,3 +493,60 @@ def update_constraints(
     db.commit()
     db.refresh(key)
     return _serialise_key(db, key)
+
+
+@router.get("/{key_id}/usage", response_model=KeyUsageOut)
+def get_key_usage(
+    key_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> KeyUsageOut:
+    """Return usage snapshots and spend summary for a key.
+
+    Scoped via ``_can_see_key``: 404 if not found or not visible.
+    Returns invocation_log snapshots only (most recent 200), ordered
+    period_start desc.
+    """
+    key = db.get(Key, key_id)
+    if key is None or not _can_see_key(db, actor, key):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
+        )
+
+    now = datetime.now(timezone.utc)
+    rolling_spend = _rolling_spend(db, key, now)
+
+    snapshots_rows = db.scalars(
+        select(UsageSnapshot)
+        .where(
+            UsageSnapshot.key_id == key.id,
+            UsageSnapshot.source == "invocation_log",
+        )
+        .order_by(UsageSnapshot.period_start.desc())
+        .limit(200)
+    ).all()
+
+    snapshots = [
+        UsageSnapshotOut(
+            period_start=s.period_start,
+            period_end=s.period_end,
+            model_id=s.model_id,
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            cache_read_tokens=s.cache_read_tokens,
+            cache_write_tokens=s.cache_write_tokens,
+            cost=float(s.cost),
+        )
+        for s in snapshots_rows
+    ]
+
+    return KeyUsageOut(
+        key_id=key.id,
+        status=key.status,
+        rolling_limit=float(key.rolling_limit) if key.rolling_limit is not None else None,
+        rolling_period_days=key.rolling_period_days,
+        rolling_spend=rolling_spend,
+        lifetime_budget=float(key.lifetime_budget) if key.lifetime_budget is not None else None,
+        lifetime_spend=float(key.lifetime_spend) if key.lifetime_spend is not None else 0.0,
+        snapshots=snapshots,
+    )

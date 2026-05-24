@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     # can split a plain comma-separated string (e.g. "http://localhost:5173").
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
+    # Background usage polling interval in seconds (default 2 minutes).
+    poll_interval_seconds: int = 120
+
+    # Base tokens-per-minute rate for the mock usage simulator.
+    usage_tokens_per_minute: int = 8000
+
+    # Set to False to disable the background poller (useful in test environments).
+    poller_enabled: bool = True
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, value: object) -> object:

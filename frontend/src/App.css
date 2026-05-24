@@ -878,6 +878,146 @@
 }
 
 /* ===========================================================================
+   Spend meter — compact progress bar for budget indicators
+   =========================================================================== */
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.meter__bar {
+  position: relative;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.meter__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--ok);
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.meter__fill--warn {
+  background: var(--warn);
+}
+
+.meter__fill--danger {
+  background: var(--danger);
+}
+
+.meter__label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* Stopped key banner inside a key card */
+.key-card__stopped-banner {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--r-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.key-card__stopped-note {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Collapsible usage snapshot list */
+.key-card__usage {
+  margin-top: 0.9rem;
+}
+
+.key-card__usage-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: color 0.15s ease;
+}
+
+.key-card__usage-toggle:hover {
+  color: var(--accent);
+}
+
+.key-card__usage-list {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  font-size: 0.82rem;
+}
+
+/* CC usage summary panel */
+.usage-summary {
+  margin-top: 1.5rem;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+}
+
+.usage-summary__title {
+  margin: 0 0 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.usage-summary__stat-row {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+}
+
+.usage-summary__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.usage-summary__stat-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.usage-summary__stat-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* ===========================================================================
    Keys page filter row
    =========================================================================== */
 

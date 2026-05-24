@@ -6,10 +6,10 @@ hidden from non-admins). First feature to write the ``audit_log``.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -18,8 +18,10 @@ from app.core.request import client_ip as _client_ip
 from app.db.session import get_db
 from app.models.cost_centre import CostCentre as CostCentreModel
 from app.models.cost_centre_owner import CostCentreOwner
+from app.models.inference_profile import InferenceProfile
 from app.models.key import Key
 from app.models.key_request import KeyRequest
+from app.models.usage_snapshot import UsageSnapshot
 from app.models.user import User
 from app.schemas.cost_centre import (
     CostCentre,
@@ -28,6 +30,7 @@ from app.schemas.cost_centre import (
     OwnerAssign,
     OwnerSummary,
 )
+from app.schemas.usage import CcKeyUsageSummary, CcUsageOut, ModelUsageSummary
 from app.services.aws import AwsService, KeyNotFoundError, get_aws_service
 
 router = APIRouter(prefix="/cost-centres", tags=["cost-centres"])
@@ -400,3 +403,147 @@ def remove_owner(
     db.commit()
     db.refresh(cc)
     return _serialise(db, cc)
+
+
+# ---------------------------------------------------------------------------
+# Usage endpoint
+# ---------------------------------------------------------------------------
+
+
+def _is_cco_of(db: Session, user_id: uuid.UUID, cc_id: uuid.UUID) -> bool:
+    """Return True if user_id is a CCO of cc_id."""
+    row = db.scalar(
+        select(CostCentreOwner).where(
+            CostCentreOwner.user_id == user_id,
+            CostCentreOwner.cost_centre_id == cc_id,
+        )
+    )
+    return row is not None
+
+
+@router.get("/{cc_id}/usage", response_model=CcUsageOut)
+def get_cost_centre_usage(
+    cc_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> CcUsageOut:
+    """Return usage summary for a cost centre.
+
+    Access: admin or CCO-of-cc.
+    - 404 if the CC does not exist or is invisible to the caller.
+    - 403 if visible but the caller is neither admin nor CCO of this CC.
+
+    ``total_spend`` and ``by_model`` are derived from cloudwatch snapshots
+    for the CC's active inference profiles. Per-key spend comes from
+    invocation_log rows.
+    """
+    is_admin = "admin" in (actor.roles or [])
+    cc = db.get(CostCentreModel, cc_id)
+
+    if cc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Cost centre not found"
+        )
+
+    # Non-admins cannot see archived CCs
+    if cc.status != "active" and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Cost centre not found"
+        )
+
+    # Must be admin or CCO of this specific CC
+    if not is_admin and not _is_cco_of(db, actor.id, cc.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
+
+    # Active inference profiles for this CC
+    active_profiles = db.scalars(
+        select(InferenceProfile).where(
+            InferenceProfile.cost_centre_id == cc.id,
+            InferenceProfile.status == "active",
+        )
+    ).all()
+    profile_ids = [p.id for p in active_profiles]
+
+    # Total spend from cloudwatch snapshots
+    total_raw = db.scalar(
+        select(func.coalesce(func.sum(UsageSnapshot.cost), 0)).where(
+            UsageSnapshot.inference_profile_id.in_(profile_ids),
+            UsageSnapshot.source == "cloudwatch",
+        )
+    ) if profile_ids else 0
+    total_spend = float(total_raw) if total_raw is not None else 0.0
+
+    # By-model breakdown from cloudwatch
+    by_model_rows = []
+    if profile_ids:
+        model_agg = db.execute(
+            select(
+                UsageSnapshot.model_id,
+                func.coalesce(func.sum(UsageSnapshot.cost), 0).label("cost"),
+                func.coalesce(
+                    func.sum(
+                        UsageSnapshot.input_tokens
+                        + UsageSnapshot.output_tokens
+                        + UsageSnapshot.cache_read_tokens
+                        + UsageSnapshot.cache_write_tokens
+                    ),
+                    0,
+                ).label("total_tokens"),
+            )
+            .where(
+                UsageSnapshot.inference_profile_id.in_(profile_ids),
+                UsageSnapshot.source == "cloudwatch",
+            )
+            .group_by(UsageSnapshot.model_id)
+        ).all()
+        by_model_rows = [
+            ModelUsageSummary(
+                model_id=row.model_id,
+                cost=float(row.cost),
+                total_tokens=int(row.total_tokens),
+            )
+            for row in model_agg
+        ]
+
+    # Per-key summary
+    cc_keys = db.scalars(
+        select(Key).where(Key.cost_centre_id == cc.id)
+    ).all()
+    now = datetime.now(timezone.utc)
+    key_summaries: list[CcKeyUsageSummary] = []
+    for key in cc_keys:
+        developer = db.get(User, key.developer_id)
+        # Rolling spend
+        rolling_spend = 0.0
+        if key.rolling_period_days is not None:
+            window_start = now - timedelta(days=key.rolling_period_days)
+            rs_raw = db.scalar(
+                select(func.coalesce(func.sum(UsageSnapshot.cost), 0)).where(
+                    UsageSnapshot.key_id == key.id,
+                    UsageSnapshot.source == "invocation_log",
+                    UsageSnapshot.period_start >= window_start,
+                )
+            )
+            rolling_spend = float(rs_raw) if rs_raw is not None else 0.0
+        key_summaries.append(
+            CcKeyUsageSummary(
+                key_id=key.id,
+                developer_username=developer.username if developer else "",
+                status=key.status,
+                lifetime_spend=float(key.lifetime_spend) if key.lifetime_spend is not None else 0.0,
+                rolling_spend=rolling_spend,
+                rolling_limit=float(key.rolling_limit) if key.rolling_limit is not None else None,
+                lifetime_budget=float(key.lifetime_budget) if key.lifetime_budget is not None else None,
+            )
+        )
+
+    return CcUsageOut(
+        cost_centre_id=cc.id,
+        cost_centre_code=cc.code,
+        budget_cap=float(cc.budget_cap) if cc.budget_cap is not None else None,
+        total_spend=total_spend,
+        keys=key_summaries,
+        by_model=by_model_rows,
+    )

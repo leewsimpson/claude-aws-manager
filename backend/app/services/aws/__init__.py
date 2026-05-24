@@ -47,7 +47,9 @@ __all__ = [
 def _build(mode: str) -> AwsService:
     """Construct the service for the given ``AWS_MODE``."""
     if mode == "mock":
-        return MockAwsService()
+        return MockAwsService(
+            base_tokens_per_minute=get_settings().usage_tokens_per_minute
+        )
     if mode == "real":
         return RealAwsService()
     raise ValueError(f"Unknown AWS_MODE: {mode!r} (expected 'mock' or 'real')")

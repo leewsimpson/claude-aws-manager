@@ -9,6 +9,7 @@ import type {
   ProvisionedKey,
 } from '../features/keyRequests/types'
 import type { Key, KeyStatus } from '../features/keys/types'
+import type { KeyUsage, CostCentreUsage, UsageSummary } from '../features/usage/types'
 
 export const TEST_TOKEN = 'test-token-123'
 export const ADMIN_TOKEN = 'admin-token-456'
@@ -244,6 +245,7 @@ export function seedKey(overrides?: Partial<Key>): Key {
     rolling_period_days: null,
     lifetime_budget: null,
     lifetime_spend: 0,
+    rolling_spend: 0,
     expires_at: null,
     created_at: now,
     revoked_at: null,
@@ -655,5 +657,130 @@ export const handlers = [
       key.expires_at = new Date(Date.now() + body.expiry_days * 86400000).toISOString()
     }
     return HttpResponse.json(key)
+  }),
+
+  // ---- Usage / cost tracking (Phase 7) ----
+
+  http.get('/api/keys/:id/usage', ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const key = keys.find((k) => k.id === params.id)
+    if (!key) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const now = new Date()
+    const dayAgo = new Date(now.getTime() - 86400000)
+    const twoDaysAgo = new Date(now.getTime() - 2 * 86400000)
+    const usage: KeyUsage = {
+      key_id: key.id,
+      status: key.status,
+      rolling_limit: key.rolling_limit,
+      rolling_period_days: key.rolling_period_days,
+      rolling_spend: key.rolling_spend,
+      lifetime_budget: key.lifetime_budget,
+      lifetime_spend: key.lifetime_spend,
+      snapshots: key.lifetime_spend > 0
+        ? [
+            {
+              period_start: twoDaysAgo.toISOString(),
+              period_end: dayAgo.toISOString(),
+              model_id: key.allowed_models[0] ?? 'anthropic.claude-sonnet-4-6',
+              input_tokens: 12000,
+              output_tokens: 3500,
+              cache_read_tokens: 0,
+              cache_write_tokens: 0,
+              cost: key.lifetime_spend * 0.6,
+            },
+            {
+              period_start: dayAgo.toISOString(),
+              period_end: now.toISOString(),
+              model_id: key.allowed_models[0] ?? 'anthropic.claude-sonnet-4-6',
+              input_tokens: 8000,
+              output_tokens: 2200,
+              cache_read_tokens: 1500,
+              cache_write_tokens: 0,
+              cost: key.lifetime_spend * 0.4,
+            },
+          ]
+        : [],
+    }
+    return HttpResponse.json(usage)
+  }),
+
+  http.get('/api/cost-centres/:id/usage', ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const cc = costCentres.find((c) => c.id === params.id)
+    if (!cc) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const ccKeys = keys.filter((k) => k.cost_centre_id === params.id)
+    const totalSpend = ccKeys.reduce((sum, k) => sum + k.lifetime_spend, 0)
+    const usage: CostCentreUsage = {
+      cost_centre_id: cc.id,
+      cost_centre_code: cc.code,
+      budget_cap: cc.budget_cap,
+      total_spend: totalSpend,
+      keys: ccKeys.map((k) => ({
+        key_id: k.id,
+        developer_username: k.developer_username,
+        status: k.status,
+        lifetime_spend: k.lifetime_spend,
+        rolling_spend: k.rolling_spend,
+        rolling_limit: k.rolling_limit,
+        lifetime_budget: k.lifetime_budget,
+      })),
+      by_model:
+        totalSpend > 0
+          ? [
+              {
+                model_id: 'anthropic.claude-sonnet-4-6',
+                cost: totalSpend * 0.75,
+                total_tokens: 45000,
+              },
+              {
+                model_id: 'anthropic.claude-haiku-4-5',
+                cost: totalSpend * 0.25,
+                total_tokens: 120000,
+              },
+            ]
+          : [],
+    }
+    return HttpResponse.json(usage)
+  }),
+
+  http.get('/api/usage/summary', ({ request }) => {
+    if (!isAuthed(request)) return unauthorised()
+    if (!isAdmin(request)) return forbidden()
+    const totalSpend = keys.reduce((sum, k) => sum + k.lifetime_spend, 0)
+    const activeKeys = keys.filter((k) => k.status === 'active').length
+    const stoppedKeys = keys.filter((k) => k.status === 'stopped').length
+    const summary: UsageSummary = {
+      total_spend: totalSpend,
+      active_keys: activeKeys,
+      stopped_keys: stoppedKeys,
+      cost_centres: costCentres.map((cc) => {
+        const ccKeys = keys.filter((k) => k.cost_centre_id === cc.id)
+        return {
+          cost_centre_id: cc.id,
+          code: cc.code,
+          name: cc.name,
+          budget_cap: cc.budget_cap,
+          total_spend: ccKeys.reduce((sum, k) => sum + k.lifetime_spend, 0),
+          active_keys: ccKeys.filter((k) => k.status === 'active').length,
+          stopped_keys: ccKeys.filter((k) => k.status === 'stopped').length,
+        }
+      }),
+      by_model:
+        totalSpend > 0
+          ? [
+              {
+                model_id: 'anthropic.claude-sonnet-4-6',
+                cost: totalSpend * 0.75,
+                total_tokens: 45000,
+              },
+              {
+                model_id: 'anthropic.claude-haiku-4-5',
+                cost: totalSpend * 0.25,
+                total_tokens: 120000,
+              },
+            ]
+          : [],
+    }
+    return HttpResponse.json(summary)
   }),
 ]

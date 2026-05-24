@@ -236,6 +236,72 @@ class MockAwsService(AwsService):
     def parse_invocation_logs(self, *, since: datetime) -> list[KeyUsage]:
         return self._sim.key_usage_since(since=since)
 
+    # -- rehydration ----------------------------------------------------------
+
+    def rehydrate_profile(
+        self,
+        *,
+        cost_centre_code: str,
+        model_id: str,
+        profile_arn: str,
+        profile_name: str,
+    ) -> None:
+        """Repopulate in-memory profile state from the DB without minting new ids.
+
+        Skip silently if the ARN is already known (idempotent).
+        """
+        if profile_arn in self._profiles:
+            return
+        self._profiles[profile_arn] = _ProfileState(
+            profile_arn=profile_arn,
+            profile_name=profile_name,
+            cost_centre_code=cost_centre_code,
+            model_id=model_id,
+        )
+        self._profile_index[(cost_centre_code, model_id)] = profile_arn
+
+    def rehydrate_key(
+        self,
+        *,
+        credential_id: str,
+        iam_username: str,
+        cost_centre_code: str,
+        allowed_models: list[str],
+        model_profiles: dict[str, str],
+        provisioned_at: datetime,
+        active: bool,
+    ) -> None:
+        """Repopulate in-memory key state from the DB without minting new ids.
+
+        Skip silently if the credential_id is already known (idempotent).
+        """
+        if credential_id in self._keys:
+            return
+        policy = build_model_policy(allowed_models, account_id=self._account_id)
+        now = self._clock()
+        self._keys[credential_id] = _KeyState(
+            credential_id=credential_id,
+            iam_username=iam_username,
+            cost_centre_code=cost_centre_code,
+            allowed_models=list(allowed_models),
+            policy=policy,
+            expires_at=now + timedelta(days=90),
+            model_profiles=dict(model_profiles),
+            status="active" if active else "inactive",
+        )
+        self._key_by_username[iam_username] = credential_id
+        self._sim.register_key(
+            credential_id=credential_id,
+            iam_username=iam_username,
+            cost_centre_code=cost_centre_code,
+            model_profiles=model_profiles,
+            provisioned_at=provisioned_at,
+        )
+        if not active:
+            self._sim.set_key_state(
+                credential_id=credential_id, active=False, at=provisioned_at
+            )
+
     # -- internals ------------------------------------------------------------
 
     def _require_key(self, credential_id: str) -> _KeyState:

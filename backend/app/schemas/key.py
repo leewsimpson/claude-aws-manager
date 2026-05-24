@@ -25,6 +25,7 @@ class KeyOut(BaseModel):
     allowed_models: list[str]
     rolling_limit: float | None
     rolling_period_days: int | None
+    rolling_spend: float
     lifetime_budget: float | None
     lifetime_spend: float
     expires_at: datetime | None

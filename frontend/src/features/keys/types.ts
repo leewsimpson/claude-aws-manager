@@ -23,6 +23,7 @@ export interface Key {
   rolling_period_days: number | null
   lifetime_budget: number | null
   lifetime_spend: number
+  rolling_spend: number
   expires_at: string | null
   created_at: string
   revoked_at: string | null

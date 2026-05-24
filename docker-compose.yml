@@ -30,6 +30,12 @@ services:
       DATABASE_URL: postgresql+psycopg://claudeaws:claudeaws@db:5432/claudeaws
       AWS_MODE: mock
       CORS_ORIGINS: http://localhost:5173
+      # Demo acceleration (Phase 7): the realistic defaults live in app/config.py
+      # (usage_tokens_per_minute=8000, poll_interval_seconds=120). These env
+      # overrides make synthetic spend cross the default $50/7-day rolling limit
+      # in a short wall-clock window so budget enforcement is visible in a demo.
+      USAGE_TOKENS_PER_MINUTE: "8000000"
+      POLL_INTERVAL_SECONDS: "20"
     # Apply migrations and seed (idempotent) before serving. PATH includes
     # the venv (set in the Dockerfile) so alembic/python/uvicorn resolve.
     command: ["sh", "-c", "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]

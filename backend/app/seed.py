@@ -11,6 +11,7 @@ from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.models.global_setting import GlobalSetting
 from app.models.user import User
+from app.services.pricing import seed_pricing
 
 _USERS = [
     ("admin", "Admin User", "admin@example.com", ["admin"]),
@@ -57,6 +58,8 @@ def seed(db: Session) -> None:
             db.add(GlobalSetting(key=key, value=value))
         else:
             setting.value = value
+
+    seed_pricing(db)
 
     db.commit()
 

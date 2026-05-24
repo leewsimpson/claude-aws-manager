@@ -12,7 +12,7 @@ High-level progress tracker for the build. Complements [implementation-plan.md](
 | 4 | AWS Integration Layer (Mock Only) | ✅ Done |
 | 5 | Key Request & Approval Flow | ✅ Done |
 | 6 | Key Management & Developer Dashboard | ✅ Done |
-| 7 | Cost Tracking & Budget Enforcement | ⬜ Not started |
+| 7 | Cost Tracking & Budget Enforcement | ✅ Done |
 | 8 | Dashboards & Visualisations | ⬜ Not started |
 | 9 | Budget Alerts & Global Policies | ⬜ Not started |
 | 10 | Key Expiry, Lifecycle Automation & Audit | ⬜ Not started |
@@ -559,3 +559,102 @@ screenshots/05-keys-developer.png, 06-keys-admin.png
 - Phase 7 (Cost Tracking & Budget Enforcement) adds `usage_snapshots` + `pricing_cache` tables (migration) and the background polling loop that finally **populates `lifetime_spend`** and drives `key.stopped`/`key.restarted` transitions — at which point the dashboard's "$0.00 … Phase 7" placeholder becomes real spend, and the `/keys/{id}/usage` + CC usage endpoints arrive.
 - Reuse `get_usage_metrics`/`parse_invocation_logs` (mock already accrues usage) + `record_audit` for stop/restart; tune `usage.py::base_tokens_per_minute` so a demo key crosses a 50/7-day rolling limit in a sensible wall-clock window.
 - The constraints `expiry_days` semantics (`now + days`) and the inference-profile-on-model-change path are now established — Phase 10 expiry automation should reuse them.
+
+---
+
+## Phase 7 — Cost Tracking & Budget Enforcement
+
+**Goal:** Turn the mock's synthetic usage into real **app-calculated spend** + **hard budget enforcement**. Populates `keys.lifetime_spend` + a new `rolling_spend`, drives `key.stopped`/`key.restarted`, and makes the dashboard's "$0.00 … Phase 7" placeholder live — completing the ⭐ clickable-prototype milestone. First writers for `usage_snapshots`, `pricing_cache`.
+
+### Key design decisions (resolved before freezing the contract)
+
+- **Background loop = a thin daemon thread, not APScheduler.** The spec allowed "APScheduler or FastAPI tasks"; a single fixed-interval job doesn't justify a new dependency (keeps the "minimise deps" ethos + avoids the `--renew-anon-volumes` dance). The enforcement logic is a **pure, clock-injected** `run_poll_cycle(db, aws, *, since, now)` (unit-tested directly); the thread is a thin wrapper started/stopped by the FastAPI **lifespan**, gated by `poller_enabled` (off under pytest — tests never enter the lifespan context anyway since the `client` fixture doesn't use `with TestClient`).
+- **Two usage paths per design-decisions #2/#12, both fed by the existing mock.** CloudWatch path (`get_usage_metrics` per active profile) → `usage_snapshots` rows with `key_id=NULL`, `source='cloudwatch'` → CC-level budget enforcement. Invocation-log path (`parse_invocation_logs(since)`) → rows with `key_id` set, `source='invocation_log'` → per-key rolling/lifetime enforcement + dashboard spend. Snapshots are **non-overlapping deltas** for `[since, now]`, so `SUM(cost)` over a window = spend over that window (no double counting).
+- **Cost = tokens × cached pricing** (design-decisions #2; NOT Cost Explorer). Pricing lives in `app/services/pricing.py` (per-1k USD seed values for the allowed models) and is seeded into `pricing_cache`. `compute_cost(TokenUsage, prices)` is the single cost function.
+- **Enforcement is a hard stop** (design-decisions #6). Per cycle, per key in `{active,stopped}`: `should_stop = over_rolling OR over_lifetime OR cc_over_budget`. active+should_stop → `aws.disable_key` + status `stopped` + audit `key.stopped` (with reason); stopped+!should_stop → `aws.enable_key` + status `active` + audit `key.restarted`. Rolling spend = `SUM(invocation_log cost WHERE key_id=? AND period_start >= now - rolling_period_days)`; lifetime = `SUM(all invocation_log cost for key)`; CC spend = `SUM(cloudwatch cost for CC profiles)` vs `budget_cap`.
+- **Mock rehydration (mock-only concern).** The mock is in-memory, so a backend restart/`--reload` would forget previously-provisioned keys (zero usage). At startup the lifespan rebuilds mock profile+key state from the DB (active profiles + active/stopped keys) so accrual continues; `provisioned_at` resets to start-time (pre-restart accrual is lost, but persisted snapshots keep historical spend). `rehydrate_*` is a no-op on `RealAwsService` (CloudWatch is the real source of truth).
+- **Demo acceleration knobs.** `usage_tokens_per_minute` (wired into the mock; realistic default 8000 for tests) and `poll_interval_seconds` (spec default 120). `docker-compose.yml` sets demo-friendly values so a key visibly crosses the default $50/7-day rolling limit in a short wall-clock window; the realistic shape stays the default and the assumption stays isolated in `usage.py` (Phase-11 reconciliation).
+
+### Frozen API contract (additions)
+
+- **`KeyOut` gains `rolling_spend: number`** (backward-compatible) so the developer dashboard shows rolling vs limit without N calls; `lifetime_spend` is now live.
+- **`GET /api/keys/{id}/usage`** (scoped via `_can_see_key`; 404 if not visible) → `{key_id, status, rolling_limit, rolling_period_days, rolling_spend, lifetime_budget, lifetime_spend, snapshots:[{period_start, period_end, model_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost}]}` (invocation_log rows, recent first).
+- **`GET /api/cost-centres/{id}/usage`** (admin or CCO-of-cc; dev who can see the CC but isn't owner/admin → 403; missing → 404) → `{cost_centre_id, cost_centre_code, budget_cap, total_spend, keys:[{key_id, developer_username, status, lifetime_spend, rolling_spend, rolling_limit, lifetime_budget}], by_model:[{model_id, cost, total_tokens}]}`.
+- **`GET /api/usage/summary`** (admin only) → `{total_spend, active_keys, stopped_keys, cost_centres:[{cost_centre_id, code, name, budget_cap, total_spend, active_keys, stopped_keys}], by_model:[{model_id, cost, total_tokens}]}`.
+
+### Plan — two parallel agents against the frozen contract (P1–P6 pattern)
+
+- **Agent A (backend):** migration (`usage_snapshots` + `pricing_cache`) + `test_migrations.py` (8→10) + `pricing.py` (+ seed) + `usage_poller.py` (`run_poll_cycle` + daemon poller) + lifespan wiring + mock `rehydrate_*` + `get_aws_service` reads `usage_tokens_per_minute` + 3 usage endpoints + `rolling_spend` on `KeyOut` + settings + `tests/test_usage.py` (cost maths, snapshot writes, rolling/lifetime/CC enforcement stop+restart with injected clock, endpoint scoping/RBAC). Runs pytest.
+- **Agent B (frontend):** `features/usage/{types,api}.ts` + live spend on developer key cards (lifetime + rolling progress bars, STOPPED-reason banner, "updates ~every 2 min" note) + CCO/admin CC-spend-vs-budget + admin usage summary panel — **no charts** (Phase 8). MSW + Vitest. Reuses Bedrock Control Room tokens. Runs build + vitest.
+- **Orchestrator (me):** freeze contract, integrate, apply migration to live DB, full pytest + build + vitest, browser + exploratory testing (incl. an accelerated live enforcement run — key crosses a limit → `stopped` → restored), review pass, retro + doc updates.
+
+### Progress
+
+- [x] Agent A (backend): migration + pricing + poll cycle + poller/lifespan + rehydration + endpoints + tests
+- [x] Agent B (frontend): usage feature + live spend surfacing + CC/admin summaries + MSW + Vitest
+- [x] Integrate: migration applied to live DB (head `b2c3d4e5f6a7`), full pytest + build + vitest green
+- [x] Orchestrator review + browser/exploratory testing (live enforcement: key crossed $50 rolling limit → `stopped`) + docs/retro
+
+### Decisions taken during build
+
+- **Migration `b2c3d4e5f6a7`** (`down_revision=a1b2c3d4e5f6`), hand-authored: `usage_snapshots` + `pricing_cache` per data-model.md. `test_migrations.py` now asserts 10 domain tables.
+- **Background loop = a dependency-free daemon thread** (`UsagePoller`), not APScheduler — a single fixed-interval job didn't justify a new dep (and avoids the `--renew-anon-volumes` dance). Enforcement is the **pure, clock-injected** `run_poll_cycle(db, aws, *, since, now)`; the thread is a thin wrapper started/stopped by the FastAPI **lifespan**, gated by `poller_enabled`. Tests call `run_poll_cycle` directly with an injected clock; the poller never runs under pytest (the `client` fixture doesn't enter the lifespan context).
+- **Snapshots are non-overlapping `[since, now]` deltas**, so `SUM(cost)` over a window = spend over that window. `lifetime_spend` = `SUM(invocation_log cost for key)` (monotonic); `rolling_spend` = same within `now - rolling_period_days`; CC spend = `SUM(cloudwatch cost for CC profiles)` (cumulative) vs `budget_cap`. Per cycle, per active/stopped key: `should_stop = over_rolling OR over_lifetime OR cc_over_budget` → disable/`stopped`+`key.stopped`; stopped+!should_stop → enable/`active`+`key.restarted`. System audit rows use `actor_id=None`.
+- **Cost = `Decimal`** throughout (`pricing.py::compute_cost`); per-1k seed prices for sonnet/haiku/opus in `PRICING`, upserted into `pricing_cache` by `seed_pricing` (called from `app/seed.py`). `load_pricing` reads the table, falling back to `PRICING`; unknown model → cost 0.
+- **Mock rehydration** (mock-only): `AwsService.rehydrate_profile`/`rehydrate_key` are concrete **no-ops** on the ABC (so `RealAwsService` inherits no-ops); `MockAwsService` implements them. `lifespan` calls `rehydrate_aws_from_db(db, aws)` at startup so active profiles/keys re-register and usage survives a backend `--reload`/restart (pre-restart accrual is lost, but persisted snapshots keep historical spend).
+- **`KeyOut` gained `rolling_spend`** (backward-compatible); `lifetime_spend` is now live. New schemas in `app/schemas/usage.py`; `GET /api/usage/summary` in a new `app/api/usage.py` router; the key/CC usage endpoints extend the existing `keys`/`cost_centres` routers (404-vs-403 via the existing `_can_see_key`/CCO checks).
+- **Demo acceleration:** realistic defaults (`usage_tokens_per_minute=8000`, `poll_interval_seconds=120`) live in `config.py`; `docker-compose.yml` overrides the backend to `8000000`/`20s` so a key visibly crosses the $50/7-day limit in ~2 min. The synthetic-usage shape stays isolated in `usage.py` (Phase-11 reconciliation).
+
+### What was built
+
+```
+backend/app/models/usage_snapshot.py / pricing_cache.py    UsageSnapshot, PricingCache (+ __init__)
+backend/alembic/versions/b2c3d4e5f6a7_phase7_usage_pricing.py   migration (2 tables + indexes)
+backend/app/services/pricing.py        PRICING, compute_cost (Decimal), seed_pricing, load_pricing
+backend/app/services/usage_poller.py   run_poll_cycle + UsagePoller (daemon) + rehydrate_aws_from_db
+backend/app/services/aws/base.py       + rehydrate_profile/rehydrate_key no-ops on the ABC
+backend/app/services/aws/mock.py       MockAwsService rehydrate_* implementations
+backend/app/services/aws/__init__.py   get_aws_service reads usage_tokens_per_minute
+backend/app/main.py                    lifespan: rehydrate + start/stop UsagePoller; register usage router
+backend/app/config.py                  poll_interval_seconds / usage_tokens_per_minute / poller_enabled
+backend/app/schemas/usage.py           KeyUsageOut, CcUsageOut, UsageSummaryOut (+ nested)
+backend/app/schemas/key.py             + rolling_spend on KeyOut
+backend/app/api/keys.py                + GET /{id}/usage, _rolling_spend, rolling_spend in serialiser
+backend/app/api/cost_centres.py        + GET /{id}/usage
+backend/app/api/usage.py               GET /api/usage/summary (admin)
+backend/app/seed.py                    + seed_pricing(db)
+backend/tests/test_usage.py            20 tests (cost maths, snapshot writes, stop+restart, RBAC/scoping)
+backend/tests/test_migrations.py       expected tables 8 → 10
+frontend/src/features/usage/{types,api}.ts   useKeyUsage / useCostCentreUsage / useUsageSummary
+frontend/src/features/keys/types.ts          + rolling_spend
+frontend/src/pages/KeysPage.tsx              SpendMeter, stopped-reason banner, recent-usage, CC + admin summaries
+frontend/src/App.css                         .meter/.key-card__stopped-banner/.usage-summary (token-based)
+frontend/src/{pages/KeysPage.test.tsx,mocks/handlers.ts}   8 new Vitest cases + 3 MSW handlers
+scripts/p7_enforce_check.py                  live enforcement smoke test
+docker-compose.yml                           backend demo-acceleration env
+```
+
+### Validation
+
+- Backend: **143 passed** (123 prior + 20 usage; migration round-trip included), 0 failures — verified by the orchestrator (`uv run pytest`, ~114s).
+- Frontend: `npm run build` clean (tsc strict + vite); **51 Vitest** pass (43 prior + 8 usage).
+- **Live stack (`:8000`/`:5173`):** migration applied on container start (`a1b2c3d4e5f6 → b2c3d4e5f6a7`); `scripts/p7_enforce_check.py` drove a CCO auto-approved key whose spend accrued each poll cycle and **hard-stopped at $51.30 ≥ the $50 rolling limit**. A dev1 key (rolling_limit $10) stopped at $10.55. **Browser-verified** (headless screenshots `07/08/09-keys-*-usage.png`): developer cards show live lifetime+rolling meters and a red "Stopped — rolling limit reached" banner with the auto-resume note; admin shows the key table's Spend column + an "Organisation usage summary" (total spend, active/stopped counts, per-CC spend-vs-budget); CCO sees both their own cards and the management view. Restart path covered deterministically by `test_rolling_limit_stops_and_restarts_key` (clock advanced past the rolling window → `active`).
+
+### Retro
+
+**What went well**
+- The P1–P6 frozen-contract + two-parallel-agents pattern held at the most logic-heavy phase yet: backend (143) and frontend (51) integrated with **zero interface drift** on the orchestrator's first run, and the live enforcement smoke test passed first try. Freezing `rolling_spend` onto `KeyOut` (not just the `/usage` endpoint) meant the developer dashboard needed no extra fetch for the headline numbers.
+- Keeping `run_poll_cycle` a **pure, clock-injected** function paid off twice: deterministic stop+restart unit tests, and a daemon-thread wrapper thin enough to need no new dependency. The non-overlapping-delta snapshot model made lifetime/rolling/CC spend all fall out of simple `SUM`s.
+- The milestone is genuinely demoable end-to-end against the mock — exactly the Phase-7 feedback checkpoint the plan called for.
+
+**What bit us (and the lesson)**
+- **An agent restructured `CLAUDE.md` unbidden.** The brief said "don't edit `docs/`", but `CLAUDE.md` sits at the repo root, so it wasn't covered. The rewrite happened to be an improvement (and the file's own directive invites concision), so it was adopted + corrected — but it could have silently dropped load-bearing guidance. **Lesson: scope file-write guardrails by explicit path, not by intent — name `CLAUDE.md` (and any root docs) in the "do not edit" list for sub-agents, or have them propose changes rather than apply them.**
+- **Mock-is-in-memory bites budget tracking specifically.** Usage resets on backend restart unless rehydrated; `--reload` (dev) restarts the process on every code change. Rehydration closes the gap, but pre-restart accrual is still lost and `provisioned_at` resets. **Lesson: any state the mock must persist across the process boundary needs an explicit DB-rehydration step — and this whole class of issue evaporates under real AWS (CloudWatch is the source of truth), so don't over-engineer it for the mock.**
+- **Demo realism vs observability is a real tension.** Realistic token rates (8k/min) would take ~30h to cross a $50 limit; the demo needs minutes. Resolved by env-overriding the rate (8M/min) rather than baking unrealistic numbers into `usage.py`. **Lesson: keep the realistic value the code default and put the demo distortion in compose env, clearly labelled.**
+
+**Carry-forward for Phase 8**
+- Phase 8 (Dashboards & Visualisations) adds a charting library and rich CCO/Admin views. The data is already there: `usage_snapshots` (both sources), `GET /api/cost-centres/{id}/usage` (incl. `by_model`), `GET /api/usage/summary`, and per-key `GET /api/keys/{id}/usage`. Phase 7 deliberately surfaced **numbers/meters, not charts** — Phase 8 should add time-series endpoints (snapshots are timestamped deltas, ideal for trend lines) and date-range selectors.
+- Reuse `run_poll_cycle`'s spend queries for any aggregation; keep money as `Decimal`.
+- `alert_history`/`alert_configs` (P9) can hang off the same poll cycle (threshold checks on the spend it already computes) — wire the alert engine into `run_poll_cycle`.
+- Residual demo data persists in the dev DB (several stopped/revoked keys, `CC-P7-*`); harmless local residue, consistent with prior phases. The accelerated compose env (`USAGE_TOKENS_PER_MINUTE=8000000`) will keep stopping keys quickly — reset to realistic values or remove the override when not demoing.
+- Reconcile the synthetic-usage shape + pricing against real AWS in Phase 11 (still the only unproven assumption, isolated in `usage.py`).

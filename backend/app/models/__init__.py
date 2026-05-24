@@ -11,6 +11,8 @@ from app.models.global_setting import GlobalSetting
 from app.models.inference_profile import InferenceProfile
 from app.models.key import Key
 from app.models.key_request import KeyRequest
+from app.models.pricing_cache import PricingCache
+from app.models.usage_snapshot import UsageSnapshot
 from app.models.user import User
 
 __all__ = [
@@ -21,5 +23,7 @@ __all__ = [
     "InferenceProfile",
     "Key",
     "KeyRequest",
+    "PricingCache",
+    "UsageSnapshot",
     "User",
 ]

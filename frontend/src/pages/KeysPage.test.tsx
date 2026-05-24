@@ -139,6 +139,102 @@ describe('KeysPage — developer', () => {
 
     expect(screen.queryByRole('button', { name: /^regenerate$/i })).not.toBeInTheDocument()
   })
+
+  // ---- Phase 7: live spend ----
+
+  it('shows lifetime spend (no budget) for a key with spend', async () => {
+    seedKey({ status: 'active', lifetime_spend: 12.5, rolling_spend: 3.2 })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    // Lifetime spend displayed as currency
+    expect(screen.getByText(/\$12\.50/)).toBeInTheDocument()
+  })
+
+  it('shows rolling spend for a key with rolling budget set', async () => {
+    seedKey({
+      status: 'active',
+      rolling_spend: 8.0,
+      rolling_limit: 20.0,
+      rolling_period_days: 7,
+    })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    // Rolling spend/limit labels appear
+    expect(screen.getByText(/\$8\.00/)).toBeInTheDocument()
+    expect(screen.getByText(/\$20\.00/)).toBeInTheDocument()
+  })
+
+  it('shows stopped banner with rolling-limit reason when rolling spend >= limit', async () => {
+    seedKey({
+      status: 'stopped',
+      rolling_spend: 20.0,
+      rolling_limit: 20.0,
+      rolling_period_days: 7,
+      lifetime_spend: 20.0,
+      lifetime_budget: 100.0,
+    })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/stopped — rolling limit reached/i)
+    expect(screen.getByText(/approximately every 2 minutes/i)).toBeInTheDocument()
+  })
+
+  it('shows stopped banner with lifetime-budget reason when lifetime spend >= budget', async () => {
+    seedKey({
+      status: 'stopped',
+      rolling_spend: 5.0,
+      rolling_limit: 50.0,
+      rolling_period_days: 7,
+      lifetime_spend: 100.0,
+      lifetime_budget: 100.0,
+    })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/stopped — lifetime budget reached/i)
+  })
+
+  it('shows stopped banner with cost-centre reason when no specific limit exceeded', async () => {
+    seedKey({
+      status: 'stopped',
+      rolling_spend: 5.0,
+      rolling_limit: null,
+      rolling_period_days: null,
+      lifetime_spend: 10.0,
+      lifetime_budget: null,
+    })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/stopped — cost-centre budget reached/i)
+  })
+
+  it('shows the Recent usage collapsible toggle and opens it', async () => {
+    const user = userEvent.setup()
+    seedKey({ status: 'active', lifetime_spend: 5.0 })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    // Toggle is present
+    const toggle = screen.getByRole('button', { name: /recent usage/i })
+    expect(toggle).toBeInTheDocument()
+
+    // Open it
+    await user.click(toggle)
+
+    // Usage table headers should appear
+    expect(await screen.findByRole('columnheader', { name: /period/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /cost/i })).toBeInTheDocument()
+  })
 })
 
 describe('KeysPage — reviewer (admin)', () => {
@@ -230,6 +326,63 @@ describe('KeysPage — reviewer (admin)', () => {
 
     // Status badge should update
     expect(await screen.findByText('revoked')).toBeInTheDocument()
+  })
+
+  it('reviewer table has a Spend column header', async () => {
+    seedKey({ status: 'active' })
+    renderPage(ADMIN_TOKEN)
+
+    await screen.findByRole('heading', { name: /key management/i })
+    // Multiple "spend" column headers may exist (keys table + summary panel)
+    const spendHeaders = await screen.findAllByRole('columnheader', { name: /spend/i })
+    expect(spendHeaders.length).toBeGreaterThan(0)
+  })
+
+  it('admin sees per-key spend in the management table', async () => {
+    seedKey({ status: 'active', lifetime_spend: 7.5, rolling_spend: 2.1 })
+    renderPage(ADMIN_TOKEN)
+
+    await screen.findByText('Developer One (dev1)')
+
+    // Spend is shown — multiple matches expected (table cell + summary panel)
+    const matches = await screen.findAllByText(/\$7\.50/)
+    expect(matches.length).toBeGreaterThan(0)
+  })
+
+  it('admin sees organisation usage summary panel', async () => {
+    renderPage(ADMIN_TOKEN)
+
+    await screen.findByRole('heading', { name: /key management/i })
+
+    // The admin summary should render (no keys so totals will be $0.00)
+    expect(await screen.findByText(/organisation usage summary/i)).toBeInTheDocument()
+    expect(screen.getByText(/total spend/i)).toBeInTheDocument()
+    expect(screen.getByText(/active keys/i)).toBeInTheDocument()
+  })
+
+  it('admin sees CC usage summary when CC filter is selected', async () => {
+    const user = userEvent.setup()
+    seedKey({ status: 'active', lifetime_spend: 5.0 })
+    renderPage(ADMIN_TOKEN)
+
+    await screen.findByRole('heading', { name: /key management/i })
+
+    // Wait for the cost centres to load into the select options
+    await waitFor(() => {
+      const ccSelect = screen.getByLabelText(/filter by cost centre/i)
+      expect(ccSelect).not.toBeNull()
+      // The option with value cc-1 must exist
+      expect(
+        (ccSelect as HTMLSelectElement).querySelector('option[value="cc-1"]'),
+      ).not.toBeNull()
+    })
+
+    // Select the ENG cost centre in the filter
+    const ccSelect = screen.getByLabelText(/filter by cost centre/i)
+    await user.selectOptions(ccSelect, 'cc-1')
+
+    // CC usage summary should appear
+    expect(await screen.findByText(/cost centre spend — ENG/i)).toBeInTheDocument()
   })
 })
 

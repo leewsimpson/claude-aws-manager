@@ -155,25 +155,25 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 **Goal:** Track token usage, calculate costs, enforce rolling and lifetime budgets.
 
-- [ ] Usage data models:
+- [x] Usage data models:
   - `UsageSnapshot` (key_id (nullable), inference_profile_id, model_id, source, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, period_start, period_end)
   - `PricingCache` (model_id, model_name, input_price_per_1k, output_price_per_1k, cache prices, region)
   - (`InferenceProfile` model already added in Phase 5)
-- [ ] Pricing config: model → price-per-1K-tokens (input/output), loaded from config file
-- [ ] Background polling task (APScheduler or FastAPI background):
-  - On each cycle (frequency defined in [design-decisions.md](design-decisions.md#6-budget-enforcement-timing)): call AWS layer `get_usage_metrics` for each active inference profile
+- [x] Pricing config: model → price-per-1K-tokens (input/output), in `app/services/pricing.py::PRICING`, seeded into `pricing_cache`
+- [x] Background polling task (a dependency-free daemon thread, started in the FastAPI lifespan; pure `run_poll_cycle`):
+  - On each cycle (frequency per [design-decisions.md](design-decisions.md#6-budget-enforcement-timing); demo-accelerated via env): call AWS layer `get_usage_metrics` for each active inference profile
   - Calculate cost (tokens × pricing)
-  - Store usage snapshots
+  - Store usage snapshots (cloudwatch CC-level + invocation-log per-key)
   - Check per-key rolling limit → disable key if exceeded
   - Check per-key lifetime budget → disable key if exceeded
-  - Check cost centre budget cap → disable all CC keys if exceeded
+  - Check cost centre budget cap → disable CC keys if exceeded
   - Re-enable keys when rolling window advances and spend drops below limit
-- [ ] API endpoints:
+- [x] API endpoints:
   - `GET /api/keys/{id}/usage` — usage history for a key
   - `GET /api/cost-centres/{id}/usage` — aggregate usage for a CC
   - `GET /api/usage/summary` — admin-level summary across all CCs
-- [ ] Developer dashboard: show current spend vs limits, "stopped" status, when budget available again
-- [ ] CCO dashboard: cost centre spend vs budget cap
+- [x] Developer dashboard: live spend vs limits (meters), "stopped" reason banner + auto-resume note
+- [x] CCO/Admin dashboard: cost centre spend vs budget cap + org usage summary
 
 **Outputs:** Automated cost tracking with hard budget enforcement. Usage data flowing into the app.
 
