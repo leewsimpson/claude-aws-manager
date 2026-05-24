@@ -110,11 +110,11 @@ REST endpoints grouped by domain. Handles authentication (hardcoded users for Po
 #### 3.2.2 Service Layer
 Business logic decoupled from HTTP concerns. Orchestrates the key lifecycle:
 
-- **Key Provisioning Service** — Handles the request → approval → AWS provisioning flow. Creates IAM user, attaches model restriction policies, generates Bedrock API Key via `CreateServiceSpecificCredential`, returns bearer token.
+- **Key Provisioning Service** — Handles the request → approval → AWS provisioning flow. Creates IAM user, attaches model restriction policy (including `bedrock:CallWithBearerToken` + inference profile access), creates/assigns inference profiles for the cost centre, generates Bedrock API Key via `CreateServiceSpecificCredential`, returns bearer token + `modelOverrides` setup instructions.
 - **Key Lifecycle Service** — Revocation (`UpdateServiceSpecificCredential` → Inactive), regeneration (`ResetServiceSpecificCredential`), expiry handling, and cleanup (`DeleteServiceSpecificCredential` + `DeleteUser`).
-- **Cost Tracking Service** — Polls CloudWatch metrics per inference profile, calculates costs using cached pricing, updates usage snapshots in the DB.
-- **Budget Enforcement Service** — Compares accumulated cost against rolling-period and lifetime budgets. Disables keys when CC budget is exceeded.
-- **Pricing Service** — Fetches model pricing from AWS Price List API (`AmazonBedrockFoundationModels`), caches in DB, refreshes daily.
+- **Cost Tracking Service** — Polls CloudWatch metrics per inference profile, calculates costs using cached pricing, updates usage snapshots in the DB. Per-key drill-down comes from invocation logs (IAM user identity).
+- **Budget Enforcement Service** — Compares accumulated cost against per-key rolling-period/lifetime limits and CC-level budget caps. Disables individual keys or all keys in a CC as needed.
+- **Pricing Service** — Provides model pricing rates. Hardcoded for PoC; production fetches from AWS Price List API (`AmazonBedrockFoundationModels`), caches in DB, refreshes daily.
 
 #### 3.2.3 AWS Integration Layer
 Thin wrapper around `boto3` calls. Abstracted behind an interface so it can be swapped for a mock layer during local development.
@@ -122,18 +122,20 @@ Thin wrapper around `boto3` calls. Abstracted behind an interface so it can be s
 **AWS services used:**
 | Service | Purpose |
 |---------|---------|
-| **IAM** | Create/delete users, attach/detach policies, create/reset/deactivate service-specific credentials |
-| **Bedrock** | Create inference profiles, model access configuration |
+| **IAM** | Create/delete users, attach/detach policies (including `bedrock:CallWithBearerToken`, `bedrock:GetInferenceProfile`), create/reset/deactivate service-specific credentials |
+| **Bedrock** | Create inference profiles (one per CC per model), model access configuration |
 | **CloudWatch** | Poll `InputTokenCount`, `OutputTokenCount`, `CacheReadInputTokens`, `CacheWriteInputTokens` per inference profile |
-| **Pricing** | Fetch current Bedrock model pricing via Price List Query API |
+| **Pricing** | Fetch current Bedrock model pricing via Price List Query API (hardcoded for PoC, API for production) |
 | **CloudTrail** | Audit trail (read-only — AWS logs automatically per IAM user) |
 
 #### 3.2.4 Background Scheduler
-A periodic task (every 1-2 minutes) that:
+A periodic task (every 5 minutes) that:
 1. Queries CloudWatch for token metrics per active inference profile
 2. Calculates cost using cached pricing rates
 3. Updates usage snapshots in the database
-4. Checks budgets and disables keys if thresholds are exceeded
+4. Checks CC-level budgets and disables all keys in the CC if the budget cap is exceeded
+5. Checks per-key rolling-period and lifetime limits; disables individual keys as needed
+6. Sends alerts at configurable thresholds (50%, 80%, 100%)
 
 ### 3.3 Database (PostgreSQL)
 
@@ -191,15 +193,20 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant AWS as AWS (IAM)
 
-    loop Every 1-2 minutes
+    loop Every 5 minutes
         Sched->>CW: GetMetricStatistics per inference profile
         CW-->>Sched: InputTokenCount, OutputTokenCount, Cache tokens
         Sched->>Sched: Calculate cost (tokens × cached pricing)
         Sched->>DB: Update usage_snapshots
-        Sched->>DB: Check CC budget (rolling + lifetime)
-        alt Budget exceeded
+        Sched->>DB: Check per-key limits (rolling + lifetime)
+        alt Per-key limit exceeded
             Sched->>AWS: UpdateServiceSpecificCredential(Status=Inactive)
             Sched->>DB: Update key status → "Stopped"
+        end
+        Sched->>DB: Check CC budget cap
+        alt CC budget exceeded
+            Sched->>AWS: Disable all keys in CC
+            Sched->>DB: Update all key statuses → "Stopped"
         end
     end
 ```
@@ -229,9 +236,9 @@ Dedicated AWS account for Claude Code Bedrock usage (isolated from other workloa
 
 **Resources managed by the platform:**
 - IAM users (one per developer per cost centre, naming: `claude-{dev}-{cc}`)
-- IAM policies (model restrictions per user)
-- Application inference profiles (one per cost centre)
-- CloudWatch metrics (read-only — populated automatically by Bedrock)
+- IAM policies (model restrictions + inference profile access + `bedrock:CallWithBearerToken` per user)
+- Application inference profiles (one per cost centre **per model** — e.g. CC with Sonnet + Haiku = 2 profiles)
+- CloudWatch metrics (read-only — populated automatically by Bedrock when requests route through inference profiles)
 
 ### 5.2 Local Development
 
@@ -262,5 +269,7 @@ Mock AWS layer for local dev; real AWS for integration tests and PoC demo.
 ## 7. Related Documents
 
 - [Requirements](REQUIREMENTS.md) — Full functional and non-functional requirements
-- [Design Decisions](design-decisions.md) — All 11 design decisions with rationale
+- [Data Model](data-model.md) — Database schema, entity definitions, and relationships
+- [Design Decisions](design-decisions.md) — All design decisions with rationale
+- [Tech Spike](tech-spike.md) — Hands-on validation items before PoC build
 - [Research](../research/) — Supporting research on AWS Bedrock, IAM, cost tracking, and more

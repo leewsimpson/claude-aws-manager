@@ -36,24 +36,40 @@ CreateUser → AttachUserPolicy (model restrictions) → CreateServiceSpecificCr
 
 ---
 
-## 2. Cost Tracking: How Do We Know What Each Key Has Spent?
+## 2. Cost Tracking: How Do We Know What Each Key Has Spent? ✅ DECIDED
 
-**The core question:** How do we get per-key usage data in dollars to enforce rolling budgets?
+**Decision: CloudWatch metrics (real-time) + invocation logs (detailed breakdown), with app-calculated cost**
 
-| Option | How it works | Granularity | Latency |
-|--------|-------------|-------------|---------|
-| **Application Inference Profiles** | Create a profile per key (or per cost centre); CloudWatch metrics scoped to profile | Per-profile (can be per-key or per-CC) | Near real-time (CloudWatch) |
-| **Model Invocation Logging (S3/CloudWatch Logs)** | Enable Bedrock invocation logging; parse logs for token counts per IAM identity | Per-request, per-IAM-user | Minutes (log delivery) |
-| **CloudWatch Metrics by IAM Principal** | Filter Bedrock CloudWatch metrics by IAM user dimension | Per-IAM-user | Near real-time |
-| **AWS Cost Explorer + Cost Allocation Tags** | Tag resources; use Cost Explorer API for cost data | Per-tag (cost centre level) | 24-48 hours delay |
+Two-layer approach:
+1. **CloudWatch metrics per inference profile** for near-real-time CC-level token counts (InputTokenCount, OutputTokenCount)
+2. **Model invocation logs** (S3/CloudWatch Logs) for per-key drill-down via IAM user identity
 
-**Sub-decisions (narrowed by Decision #1):**
-- ~~Do we create one inference profile per **key** or per **cost centre**?~~ → **Per cost centre.** Since each Bedrock API Key creates a unique IAM user, per-key attribution comes from the IAM user identity in invocation logs automatically. Inference profiles per cost centre give us cost-centre-level CloudWatch metrics, and per-key drill-down comes from the logs.
-- How frequently do we poll for cost data? (Affects budget enforcement latency)
-- Do we calculate cost ourselves (tokens × pricing) or rely on AWS cost data?
-- Where do we store the pricing rates — hardcoded, config, or fetched from AWS?
+| Data source | What it gives us | Latency |
+|-------------|-----------------|--------|
+| CloudWatch Metrics (per inference profile) | CC-level token counts for budget enforcement | Near real-time |
+| Model Invocation Logs | Per-key, per-request detail for drill-down and reconciliation | Minutes |
+| AWS Cost Explorer (cost allocation tags) | CC-level dollar costs for finance/reporting | 24-48 hours |
 
-**See:** [research/04](../research/04-cost-tracking-budget-enforcement.md), [research/03](../research/03-aws-bedrock-model-access-setup.md)
+**Sub-decisions (all resolved):**
+- **Inference profiles:** One per cost centre **per model** (since each profile binds to a single model). If CC-1234 allows Sonnet + Haiku, that's 2 profiles. Claude Code's `modelOverrides` setting maps each model to its CC-specific profile ARN — confirmed working with bearer token auth (see below).
+- **Polling frequency:** Every 5 minutes. Sufficient for budget enforcement; overshoot is bounded.
+- **Cost calculation:** App-calculated (tokens × pricing). Cost Explorer has 24-48h lag — incompatible with rolling budget enforcement.
+- **Pricing storage:** Config file, not hardcoded. Refreshed periodically. Start with hardcoded values for PoC, move to AWS Price List API later.
+
+**Bearer token + inference profiles — CONFIRMED (May 2026):**
+The Claude Code docs explicitly confirm that `AWS_BEARER_TOKEN_BEDROCK` and inference profile ARNs work together. The IAM configuration section even notes: *"This applies most often to `AWS_BEARER_TOKEN_BEDROCK` deployments, where the token's policy is typically narrower than a full IAM role."*
+
+**Developer setup instructions** will include `modelOverrides` in the Claude Code settings file, mapping each allowed model to its CC's inference profile ARN:
+```json
+{
+  "modelOverrides": {
+    "claude-sonnet-4-6": "arn:aws:bedrock:ap-southeast-2:123456789012:application-inference-profile/cc1234-sonnet",
+    "claude-haiku-4-5": "arn:aws:bedrock:ap-southeast-2:123456789012:application-inference-profile/cc1234-haiku"
+  }
+}
+```
+
+**See:** [research/04](../research/04-cost-tracking-budget-enforcement.md), [research/03](../research/03-aws-bedrock-model-access-setup.md), [research/08](../research/08-architecture-implementation-notes.md)
 
 ---
 
@@ -69,20 +85,32 @@ Since Bedrock API Keys create an IAM user underneath (Decision #1), we attach an
 - When a global model restriction changes (Admin removes a model), the platform removes it from all IAM policies immediately
 - `AmazonBedrockLimitedAccess` is replaced with a scoped custom policy
 
-**Example policy (Sonnet + Haiku only):**
+**Example policy (Sonnet + Haiku only, with inference profile support):**
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "AllowModelInvocation",
       "Effect": "Allow",
       "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
       "Resource": [
         "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-*",
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*"
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*",
+        "arn:aws:bedrock:*:*:application-inference-profile/*"
       ]
     },
     {
+      "Sid": "AllowInferenceProfileResolution",
+      "Effect": "Allow",
+      "Action": ["bedrock:GetInferenceProfile", "bedrock:ListInferenceProfiles"],
+      "Resource": [
+        "arn:aws:bedrock:*:*:inference-profile/*",
+        "arn:aws:bedrock:*:*:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "AllowBearerTokenUsage",
       "Effect": "Allow",
       "Action": "bedrock:CallWithBearerToken",
       "Resource": "*"
@@ -91,8 +119,13 @@ Since Bedrock API Keys create an IAM user underneath (Decision #1), we attach an
 }
 ```
 
+**Notes on the policy:**
+- `bedrock:CallWithBearerToken` is a confirmed IAM action that controls bearer token usage. The `bedrock:bearerTokenType` condition key can filter by `SHORT_TERM` or `LONG_TERM`.
+- `bedrock:GetInferenceProfile` lets Claude Code resolve an inference profile ARN to its backing model (used to select the correct request shape). Without it, Claude Code retries with the alternate shape — requests still succeed but add an extra round-trip.
+- `application-inference-profile/*` resources are required because Claude Code invokes models through inference profiles when `modelOverrides` are configured (Decision #2).
+
 **Why not alternatives:**
-- Application Inference Profiles bind to a single model — if a CCO allows 2 models, you'd need 2 profiles per key. IAM policy handles multiple models cleanly.
+- Application Inference Profiles bind to a single model — if a CCO allows 2 models, you'd need 2 profiles per key. IAM policy handles multiple models cleanly in a single statement.
 - App-level enforcement is weak — developer could bypass it with the bearer token directly.
 - Guardrails are for content filtering, not model access control.
 
@@ -152,15 +185,17 @@ This decision is resolved by Decision #1. Each long-term Bedrock API Key creates
 
 ## 6. Budget Enforcement Timing ✅ DECIDED
 
-**Decision: Poll CloudWatch every 1-2 minutes (aligned with Decision #2)**
+**Decision: Poll CloudWatch every 5 minutes (aligned with Decision #2)**
 
 The cost tracking polling loop (Decision #2) doubles as budget enforcement. Each poll cycle:
-1. Fetch token counts from CloudWatch per inference profile
-2. Calculate cost using cached Price List API rates
-3. Compare against CC rolling budget
-4. If exceeded → disable all keys in that CC via `UpdateServiceSpecificCredential(Status=Inactive)`
+1. Fetch token counts from CloudWatch per inference profile (CC-level)
+2. Calculate cost using cached pricing rates (tokens × per-model price)
+3. Compare against CC rolling budget and per-key rolling limits
+4. If CC budget exceeded → disable all keys in that CC via `UpdateServiceSpecificCredential(Status=Inactive)`
+5. If per-key limit exceeded → disable that specific key
+6. Send alerts at configurable thresholds (50%, 80%, 100%)
 
-**Accepted trade-off:** A developer could overshoot the budget by up to ~2 minutes of usage before enforcement kicks in. This is acceptable.
+**Accepted trade-off:** A developer could overshoot the budget by up to ~5 minutes of usage before enforcement kicks in. Worst case with N active developers in a CC is ~5 minutes × N developers. Acceptable for PoC; can tighten polling for CCs near their budget threshold in production.
 
 **Remaining sub-decision:**
 - Should we pre-calculate "estimated remaining budget" for the developer dashboard? (Nice-to-have, can defer to production)

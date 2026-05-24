@@ -97,15 +97,27 @@ These use **cross-region inference profile IDs** (with the `us.` prefix).
 export ANTHROPIC_MODEL='arn:aws:bedrock:us-east-2:your-account-id:application-inference-profile/your-model-id'
 ```
 
-### Model Overrides (Multiple Versions)
+**CONFIRMED (May 2026):** Application inference profile ARNs work with bearer token auth (`AWS_BEARER_TOKEN_BEDROCK`). The Claude Code docs explicitly state: *"This applies most often to `AWS_BEARER_TOKEN_BEDROCK` deployments, where the token's policy is typically narrower than a full IAM role."*
+
+The IAM user underlying the bearer token needs `bedrock:GetInferenceProfile` permission for Claude Code to resolve the profile to its backing model. Without it, Claude Code recovers automatically with a retry, but granting the permission avoids the extra round-trip.
+
+### Model Overrides (Multiple Versions → Multiple Inference Profiles)
+
+The `modelOverrides` setting maps individual model names to provider-specific ARNs. This is the mechanism for routing each model to a cost-centre-specific inference profile:
 
 ```json
 {
   "modelOverrides": {
     "claude-opus-4-7": "arn:aws:bedrock:us-east-2:123456789012:application-inference-profile/opus-47-prod",
-    "claude-opus-4-6": "arn:aws:bedrock:us-east-2:123456789012:application-inference-profile/opus-46-prod"
+    "claude-opus-4-6": "arn:aws:bedrock:us-east-2:123456789012:application-inference-profile/opus-46-prod",
+    "claude-sonnet-4-6": "arn:aws:bedrock:us-east-2:123456789012:application-inference-profile/sonnet-prod"
   }
 }
+```
+
+Keys must be Anthropic model IDs. When a user selects a mapped model in `/model`, Claude Code calls Bedrock with the mapped ARN. Overrides work alongside `availableModels` — the allowlist matches on the Anthropic model ID, not the override value.
+
+**For our platform:** Each cost centre creates one inference profile per allowed model. Developer setup instructions include `modelOverrides` pointing each model to the CC's profile.
 ```
 
 ---
@@ -191,7 +203,10 @@ export ANTHROPIC_BEDROCK_BASE_URL=https://your-gateway.example.com
 2. **`/login` and `/logout` are disabled** when using Bedrock (auth via AWS credentials)
 3. **Bedrock API Keys** (`AWS_BEARER_TOKEN_BEDROCK`) are the simplest credential option — perfect for our use case of distributing keys to developers
 4. **Application Inference Profiles** can be used for cost tracking per user/team
-5. **1M token context window** is supported on Opus 4.7/4.6 and Sonnet 4.6
+5. **Bearer token + inference profiles are confirmed compatible** — Claude Code docs explicitly reference this combination
+6. **`modelOverrides`** is the mechanism for mapping models to CC-specific inference profile ARNs — one profile per model per CC
+7. **1M token context window** is supported on Opus 4.7/4.6 and Sonnet 4.6
+8. **`bedrock:GetInferenceProfile`** permission is recommended for bearer token deployments — lets Claude Code resolve profiles without a retry
 
 ---
 
@@ -199,11 +214,12 @@ export ANTHROPIC_BEDROCK_BASE_URL=https://your-gateway.example.com
 
 | Requirement | Bedrock Capability |
 |------------|-------------------|
-| Credential distribution to developers | Bedrock API Keys or IAM user access keys |
+| Credential distribution to developers | Bedrock API Keys (`AWS_BEARER_TOKEN_BEDROCK`) |
 | Model restrictions per key | IAM policy on `bedrock:InvokeModel` with Resource ARN filtering |
-| Cost tracking per developer | Application Inference Profiles with tags |
+| Cost tracking per cost centre | Application Inference Profiles with tags + `modelOverrides` |
+| Cost tracking per developer | IAM user identity in invocation logs (automatic with Bedrock API Keys) |
 | Region (ap-southeast-2) | Set via `AWS_REGION` environment variable |
-| Key revocation | Delete IAM user/access key or revoke Bedrock API key |
+| Key revocation | `UpdateServiceSpecificCredential(Status=Inactive)` or `DeleteServiceSpecificCredential` |
 
 ---
 

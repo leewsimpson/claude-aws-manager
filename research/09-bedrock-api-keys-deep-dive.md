@@ -198,6 +198,59 @@ You can also enforce max expiration via SCP:
 1. **Bedrock-only** — Keys cannot be used with other AWS services (but that's fine for us)
 2. **AWS recommends short-term for production** — Long-term keys are labelled "for exploration." However, the underlying mechanism (IAM user + service-specific credential) is a standard IAM pattern. The warning is about security best practices, not a technical limitation.
 3. **Console generation** — The console UI only generates keys for the current user. Programmatic creation via `CreateServiceSpecificCredential` is needed for our use case.
+
+---
+
+## Bearer Token + Inference Profiles: CONFIRMED (May 2026)
+
+**Key finding:** Bearer token auth (`AWS_BEARER_TOKEN_BEDROCK`) works with application inference profile ARNs. This was confirmed from:
+- Claude Code Bedrock docs (https://code.claude.com/docs/en/amazon-bedrock)
+- AWS API keys permissions docs (https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-permissions.html)
+
+The Claude Code IAM configuration section explicitly includes `application-inference-profile/*` in the resource list for bearer token deployments, and notes that `bedrock:GetInferenceProfile` permission is particularly relevant for `AWS_BEARER_TOKEN_BEDROCK` deployments.
+
+### `bedrock:CallWithBearerToken` — Confirmed IAM Action
+
+This is a real IAM action that controls usage of any API key (short-term or long-term). From the AWS docs:
+- Action: `bedrock:CallWithBearerToken`
+- Condition key: `bedrock:bearerTokenType` with values `SHORT_TERM` or `LONG_TERM`
+- Used to allow/deny bearer token usage on IAM identities
+- Must be explicitly allowed in the IAM user's policy for the bearer token to work
+
+### Required IAM Policy for Bearer Token + Inference Profiles
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowModelInvocation",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-*",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*",
+        "arn:aws:bedrock:*:*:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "AllowInferenceProfileResolution",
+      "Effect": "Allow",
+      "Action": ["bedrock:GetInferenceProfile", "bedrock:ListInferenceProfiles"],
+      "Resource": [
+        "arn:aws:bedrock:*:*:inference-profile/*",
+        "arn:aws:bedrock:*:*:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "AllowBearerTokenUsage",
+      "Effect": "Allow",
+      "Action": "bedrock:CallWithBearerToken",
+      "Resource": "*"
+    }
+  ]
+}
+```
 4. **Not supported for**: `InvokeModelWithBidirectionalStream`, Agents for Bedrock, Data Automation for Bedrock
 
 ---
