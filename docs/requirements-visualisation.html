@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code AWS Bedrock Manager — Requirements</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface-raised: #222632;
+  --border: #2d3348;
+  --border-subtle: #232738;
+  --text: #e4e7ef;
+  --text-muted: #8b92a8;
+  --text-dim: #5c6380;
+  --accent-admin: #f97316;
+  --accent-admin-bg: rgba(249, 115, 22, 0.08);
+  --accent-dev: #22d3ee;
+  --accent-dev-bg: rgba(34, 211, 238, 0.08);
+  --accent-owner: #a78bfa;
+  --accent-owner-bg: rgba(167, 139, 250, 0.08);
+  --accent-system: #34d399;
+  --accent-system-bg: rgba(52, 211, 153, 0.08);
+  --accent-warn: #fbbf24;
+  --accent-security: #f43f5e;
+  --accent-security-bg: rgba(244, 63, 94, 0.08);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 40px 32px;
+}
+
+/* Header */
+.header {
+  margin-bottom: 48px;
+  padding-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+}
+
+.header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 8px;
+}
+
+.header h1 span {
+  background: linear-gradient(135deg, var(--accent-dev), var(--accent-owner));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.header p {
+  color: var(--text-muted);
+  font-size: 15px;
+  max-width: 700px;
+}
+
+/* Navigation */
+.nav {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 40px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  padding: 12px 0;
+  z-index: 100;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nav-btn {
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.nav-btn:hover {
+  border-color: var(--accent-dev);
+  color: var(--text);
+}
+
+.nav-btn.active {
+  background: var(--accent-dev);
+  color: var(--bg);
+  border-color: var(--accent-dev);
+}
+
+/* Sections */
+.section {
+  display: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.section.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Role Cards */
+.roles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.role-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  transition: border-color 0.2s;
+}
+
+.role-card:hover {
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+}
+
+.role-card.admin { border-top: 3px solid var(--accent-admin); }
+.role-card.developer { border-top: 3px solid var(--accent-dev); }
+.role-card.owner { border-top: 3px solid var(--accent-owner); }
+
+.role-card .role-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.role-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.role-card.admin .role-icon { background: var(--accent-admin-bg); }
+.role-card.developer .role-icon { background: var(--accent-dev-bg); }
+.role-card.owner .role-icon { background: var(--accent-owner-bg); }
+
+.role-card h3 {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.role-card .concern {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border);
+}
+
+.role-card ul {
+  list-style: none;
+  padding: 0;
+}
+
+.role-card ul li {
+  font-size: 13.5px;
+  padding: 5px 0;
+  padding-left: 20px;
+  position: relative;
+  color: var(--text-muted);
+}
+
+.role-card ul li::before {
+  content: '›';
+  position: absolute;
+  left: 4px;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+/* Flow Diagram */
+.flow-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  margin-bottom: 24px;
+}
+
+.flow-container h3 {
+  font-size: 16px;
+  margin-bottom: 24px;
+  font-weight: 600;
+}
+
+.flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+
+.flow-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 0;
+  position: relative;
+}
+
+.flow-step::before {
+  content: '';
+  position: absolute;
+  left: 17px;
+  top: 40px;
+  bottom: -14px;
+  width: 2px;
+  background: var(--border);
+}
+
+.flow-step:last-child::before {
+  display: none;
+}
+
+.step-num {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.flow-step[data-actor="developer"] .step-num { border-color: var(--accent-dev); color: var(--accent-dev); }
+.flow-step[data-actor="system"] .step-num { border-color: var(--accent-system); color: var(--accent-system); }
+.flow-step[data-actor="owner"] .step-num { border-color: var(--accent-owner); color: var(--accent-owner); }
+.flow-step[data-actor="admin"] .step-num { border-color: var(--accent-admin); color: var(--accent-admin); }
+
+.step-content {
+  flex: 1;
+  padding-top: 6px;
+}
+
+.step-content .actor-tag {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 3px;
+}
+
+.flow-step[data-actor="developer"] .actor-tag { color: var(--accent-dev); }
+.flow-step[data-actor="system"] .actor-tag { color: var(--accent-system); }
+.flow-step[data-actor="owner"] .actor-tag { color: var(--accent-owner); }
+.flow-step[data-actor="admin"] .actor-tag { color: var(--accent-admin); }
+
+.step-content p {
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* Feature Cards Grid */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.feature-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+.feature-card h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feature-card h4 .badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.badge-admin { background: var(--accent-admin-bg); color: var(--accent-admin); }
+.badge-dev { background: var(--accent-dev-bg); color: var(--accent-dev); }
+.badge-owner { background: var(--accent-owner-bg); color: var(--accent-owner); }
+.badge-system { background: var(--accent-system-bg); color: var(--accent-system); }
+
+.feature-card ul {
+  list-style: none;
+  padding: 0;
+}
+
+.feature-card ul li {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  padding-left: 16px;
+  position: relative;
+}
+
+.feature-card ul li::before {
+  content: '•';
+  position: absolute;
+  left: 2px;
+  color: var(--text-dim);
+}
+
+/* Constraints Box */
+.constraints-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  margin-bottom: 24px;
+}
+
+.constraints-box h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+.constraint-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.constraint-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+
+.constraint-item .c-icon {
+  font-size: 20px;
+  min-width: 28px;
+  text-align: center;
+}
+
+.constraint-item .c-text {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.constraint-item .c-text strong {
+  color: var(--text);
+  font-weight: 500;
+  display: block;
+  margin-bottom: 2px;
+}
+
+/* Budget enforcement visual */
+.enforcement-visual {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  margin-bottom: 24px;
+}
+
+.enforcement-visual h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+.budget-bar-container {
+  margin-bottom: 24px;
+}
+
+.budget-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.budget-bar {
+  height: 32px;
+  background: var(--surface-raised);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+.budget-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  transition: width 1s ease;
+}
+
+.budget-bar-marker {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background: var(--text-dim);
+}
+
+.budget-bar-marker::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.budget-states {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.budget-state {
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  text-align: center;
+}
+
+.budget-state .state-icon {
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+
+.budget-state .state-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.budget-state .state-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* NFR section */
+.nfr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.nfr-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+.nfr-card h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nfr-card ul {
+  list-style: none;
+  padding: 0;
+}
+
+.nfr-card ul li {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 5px 0;
+  padding-left: 16px;
+  position: relative;
+}
+
+.nfr-card ul li::before {
+  content: '✓';
+  position: absolute;
+  left: 0;
+  color: var(--accent-system);
+  font-size: 11px;
+}
+
+/* Decisions Table */
+.decisions-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.decisions-table th {
+  background: var(--surface-raised);
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.decisions-table td {
+  padding: 11px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.decisions-table tr:last-child td {
+  border-bottom: none;
+}
+
+.decisions-table td:first-child {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  width: 40px;
+}
+
+.decisions-table td:nth-child(2) {
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Section headers */
+.section-header {
+  margin-bottom: 24px;
+}
+
+.section-header h2 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  margin-bottom: 6px;
+}
+
+.section-header p {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Relationship diagram */
+.relationship-diagram {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.relationship-diagram h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 28px;
+  text-align: left;
+}
+
+.rel-nodes {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 32px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.rel-node {
+  padding: 16px 24px;
+  border-radius: var(--radius);
+  border: 2px solid;
+  font-size: 13px;
+  font-weight: 600;
+  position: relative;
+}
+
+.rel-node.admin-node { border-color: var(--accent-admin); background: var(--accent-admin-bg); color: var(--accent-admin); }
+.rel-node.dev-node { border-color: var(--accent-dev); background: var(--accent-dev-bg); color: var(--accent-dev); }
+.rel-node.owner-node { border-color: var(--accent-owner); background: var(--accent-owner-bg); color: var(--accent-owner); }
+.rel-node.project-node { border-color: var(--accent-system); background: var(--accent-system-bg); color: var(--accent-system); }
+
+.rel-arrow {
+  color: var(--text-dim);
+  font-size: 20px;
+}
+
+.rel-legend {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.rel-legend-item {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rel-legend-item .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* Rolling window visual */
+.rolling-window-visual {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  margin-bottom: 24px;
+}
+
+.rolling-window-visual h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.rolling-window-visual .subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.window-timeline {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 12px;
+  align-items: flex-end;
+  height: 80px;
+}
+
+.window-day {
+  flex: 1;
+  border-radius: 3px 3px 0 0;
+  position: relative;
+  min-width: 20px;
+  transition: all 0.3s;
+}
+
+.window-day.in-window { background: var(--accent-dev); opacity: 0.7; }
+.window-day.outside { background: var(--border); opacity: 0.3; }
+
+.window-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+
+.window-bracket {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.window-bracket .bracket-line {
+  flex: 1;
+  height: 2px;
+  background: var(--accent-dev);
+  border-radius: 1px;
+}
+
+.window-bracket .bracket-label {
+  font-size: 12px;
+  color: var(--accent-dev);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Setup prereqs */
+.setup-steps {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+}
+
+.setup-steps h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+.setup-step {
+  display: flex;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.setup-step:last-child {
+  border-bottom: none;
+}
+
+.setup-step .ss-num {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.setup-step p {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  padding-top: 3px;
+}
+
+@media (max-width: 768px) {
+  .container { padding: 20px 16px; }
+  .roles-grid { grid-template-columns: 1fr; }
+  .features-grid { grid-template-columns: 1fr; }
+  .nfr-grid { grid-template-columns: 1fr; }
+  .budget-states { grid-template-columns: 1fr; }
+  .rel-nodes { flex-direction: column; }
+  .nav { gap: 4px; }
+  .nav-btn { font-size: 12px; padding: 6px 12px; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1><span>Claude Code AWS Bedrock Manager</span></h1>
+    <p>Self-service management control plane for provisioning and managing Claude Code access via AWS Bedrock. Automates credential creation, approval, distribution, and lifecycle management.</p>
+    <p style="color:var(--text-dim); font-size:13px; margin-top:8px;"><strong>Cost centre</strong> = the unit of budget ownership (can be a project, department, team, or any organisational unit).</p>
+  </div>
+
+  <nav class="nav">
+    <button class="nav-btn active" data-section="roles">Roles</button>
+    <button class="nav-btn" data-section="flow">Key Request Flow</button>
+    <button class="nav-btn" data-section="constraints">Constraints & Budgets</button>
+    <button class="nav-btn" data-section="features">Functional Reqs</button>
+    <button class="nav-btn" data-section="backend">Automated Backend</button>
+    <button class="nav-btn" data-section="nfr">Non-Functional</button>
+    <button class="nav-btn" data-section="decisions">Decisions</button>
+    <button class="nav-btn" data-section="setup">Setup</button>
+  </nav>
+
+  <!-- ROLES -->
+  <div class="section active" id="roles">
+    <div class="section-header">
+      <h2>User Roles</h2>
+      <p>A user can hold multiple roles simultaneously (e.g., a Cost Centre Owner can also be a Developer with their own keys).</p>
+    </div>
+
+    <div class="roles-grid">
+      <div class="role-card admin">
+        <div class="role-header">
+          <div class="role-icon">🛡️</div>
+          <h3>Administrator</h3>
+        </div>
+        <div class="concern">Governance, security, and organisational oversight. Acts as the ultimate authority.</div>
+        <ul>
+          <li>Break-glass super admin (configured outside the UI, no UI needed)</li>
+          <li>Configures global platform settings (region, model access, policies)</li>
+          <li>Creates cost centres</li>
+          <li>Assigns Cost Centre Owners to cost centres</li>
+          <li>Can approve/reject any key request (bypassing Cost Centre Owner)</li>
+          <li>Views usage dashboards and cost reports across all cost centres</li>
+          <li>Manages users and their access</li>
+          <li>Can revoke any key</li>
+          <li>Sets global defaults for model restrictions and key policies</li>
+          <li>Global model removal revokes that model access from all existing keys</li>
+        </ul>
+      </div>
+
+      <div class="role-card developer">
+        <div class="role-header">
+          <div class="role-icon">⌨️</div>
+          <h3>Developer</h3>
+        </div>
+        <div class="concern">Getting access to Claude Code quickly and with minimal friction. Just wants a working key.</div>
+        <ul>
+          <li>Logs in to the self-service portal</li>
+          <li>One key per cost centre, multiple cost centres simultaneously</li>
+          <li>Requests a key by selecting from all non-archived cost centres</li>
+          <li>Views own active keys, usage, and limit status</li>
+          <li>Copies key + setup instructions (retrievable after creation)</li>
+          <li>Can revoke any of their own keys</li>
+          <li>Can see when stopped (limit reached) and when budget returns</li>
+          <li>Can resubmit after rejection (no limit); sees rejection reason</li>
+          <li>Keys auto-disabled on SSO deactivation (offboarding)</li>
+        </ul>
+      </div>
+
+      <div class="role-card owner">
+        <div class="role-header">
+          <div class="role-icon">💰</div>
+          <h3>Cost Centre Owner</h3>
+        </div>
+        <div class="concern">Managing cost and usage within their cost centre(s). Owns the budget, decides who gets access and what limits apply.</div>
+        <ul>
+          <li>Assigned by Administrator to one or more projects</li>
+          <li>A cost centre can have multiple CCOs; any single one can approve</li>
+          <li>Approves or rejects developer key requests</li>
+          <li>Own key requests auto-approved (if also a Developer on same cost centre)</li>
+          <li>Manages per-key constraints: cost limit (dollars), models, expiry</li>
+          <li>Can modify constraints on existing active keys (developer notified)</li>
+          <li>Can revoke keys for developers in their cost centre</li>
+          <li>Sets and manages Cost Centre Budget Cap (dollars); can top up</li>
+          <li>Can Archive cost centre (disables keys, auto-rejects pending requests)</li>
+          <li>Can unarchive own cost centre (restores keys for current org members)</li>
+          <li>Has scoped dashboard with usage, costs, alerts</li>
+          <li>Configures alerts (email and Slack — notifications only)</li>
+          <li>Can export CSV report for their cost centre(s)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="relationship-diagram">
+      <h3>Role Relationships</h3>
+      <div class="rel-nodes">
+        <div class="rel-node admin-node">Administrator</div>
+        <div class="rel-arrow">→</div>
+        <div class="rel-node project-node">Cost Centre</div>
+        <div class="rel-arrow">←</div>
+        <div class="rel-node owner-node">Cost Centre Owner</div>
+        <div class="rel-arrow">←</div>
+        <div class="rel-node dev-node">Developer</div>
+      </div>
+      <div class="rel-legend">
+        <div class="rel-legend-item"><div class="dot" style="background:var(--accent-admin)"></div>Creates cost centres, assigns owners, overrides</div>
+        <div class="rel-legend-item"><div class="dot" style="background:var(--accent-owner)"></div>Approves keys, sets constraints, manages budget</div>
+        <div class="rel-legend-item"><div class="dot" style="background:var(--accent-dev)"></div>Requests keys, uses Claude Code</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FLOW -->
+  <div class="section" id="flow">
+    <div class="section-header">
+      <h2>Key Request Flow</h2>
+      <p>End-to-end flow from request to working Claude Code access.</p>
+    </div>
+
+    <div class="flow-container">
+      <h3>Happy Path</h3>
+      <div class="flow-steps">
+        <div class="flow-step" data-actor="developer">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="actor-tag">Developer</div>
+            <p>Opens portal, clicks "Request Key"</p>
+          </div>
+        </div>
+        <div class="flow-step" data-actor="developer">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="actor-tag">Developer</div>
+            <p>Selects a cost centre from all non-archived cost centres, optionally enters justification</p>
+          </div>
+        </div>
+        <div class="flow-step" data-actor="system">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="actor-tag">System</div>
+            <p>If developer is also a CCO for that cost centre → <strong>auto-approved</strong> (skip to step 6). Otherwise, enters <strong>Pending Approval</strong> state.</p>
+          </div>
+        </div>
+        <div class="flow-step" data-actor="system">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <div class="actor-tag">System</div>
+            <p>Cost Centre Owner(s) for that cost centre are notified</p>
+          </div>
+        </div>
+        <div class="flow-step" data-actor="owner">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            <div class="actor-tag">Cost Centre Owner</div>
+            <p>Any single CCO reviews request, approves with constraints (or rejects with reason — developer can resubmit)</p>
+          </div>
+        </div>
+        <div class="flow-step" data-actor="system">
+          <div class="step-num">6</div>
+          <div class="step-content">
+            <div class="actor-tag">System</div>
+            <p>Automatically provisions the key, tagged with cost centre code for cost attribution (target: &lt;10 seconds)</p>
+          </div>
+        </div>
+        <div class="flow-step" data-actor="developer">
+          <div class="step-num">7</div>
+          <div class="step-content">
+            <div class="actor-tag">Developer</div>
+            <p>Notified, copies setup instructions, pastes into terminal, runs <code>claude</code> — it works immediately</p>
+          </div>
+        </div>
+        <div class="flow-step" data-actor="system">
+          <div class="step-num">8</div>
+          <div class="step-content">
+            <div class="actor-tag">System</div>
+            <p>Usage tracked against cost centre; if rolling period limit reached, key is stopped until budget becomes available</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-container">
+      <h3>Admin Override Path</h3>
+      <div class="flow-steps">
+        <div class="flow-step" data-actor="admin">
+          <div class="step-num">—</div>
+          <div class="step-content">
+            <div class="actor-tag">Administrator</div>
+            <p>Can approve any key request directly, bypassing Cost Centre Owner at any time</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-container">
+      <h3>Key Statuses</h3>
+      <div class="constraint-items">
+        <div class="constraint-item">
+          <div class="c-icon">🟢</div>
+          <div class="c-text"><strong>Active</strong>Key is working, usage within limits</div>
+        </div>
+        <div class="constraint-item">
+          <div class="c-icon">🟡</div>
+          <div class="c-text"><strong>Pending Approval</strong>Request submitted, awaiting owner review</div>
+        </div>
+        <div class="constraint-item">
+          <div class="c-icon">🔴</div>
+          <div class="c-text"><strong>Stopped</strong>Rolling limit reached; blocked until budget frees up</div>
+        </div>
+        <div class="constraint-item">
+          <div class="c-icon">⚫</div>
+          <div class="c-text"><strong>Expired</strong>Past expiration date, automatically deactivated</div>
+        </div>
+        <div class="constraint-item">
+          <div class="c-icon">🚫</div>
+          <div class="c-text"><strong>Revoked</strong>Permanently deactivated, cloud resources cleaned up</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONSTRAINTS & BUDGETS -->
+  <div class="section" id="constraints">
+    <div class="section-header">
+      <h2>Constraints & Budget Enforcement</h2>
+      <p>How usage limits and budgets work across keys and projects.</p>
+    </div>
+
+    <div class="constraints-box">
+      <h3>Per-Key Constraints (set by Cost Centre Owner at approval)</h3>
+      <div class="constraint-items">
+        <div class="constraint-item">
+          <div class="c-icon">📊</div>
+          <div class="c-text"><strong>Rolling Period Cost Limit</strong>e.g., $50 over 7 days (configurable days)</div>
+        </div>
+        <div class="constraint-item">
+          <div class="c-icon">💎</div>
+          <div class="c-text"><strong>Lifetime Cost Budget</strong>Total dollars the key can ever consume</div>
+        </div>
+        <div class="constraint-item">
+          <div class="c-icon">🤖</div>
+          <div class="c-text"><strong>Model Restrictions</strong>Which models: Opus, Sonnet, Haiku (any combination)</div>
+        </div>
+        <div class="constraint-item">
+          <div class="c-icon">⏰</div>
+          <div class="c-text"><strong>Expiration Duration</strong>e.g., 90 days from provisioning</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rolling-window-visual">
+      <h3>Rolling Window Mechanism</h3>
+      <p class="subtitle">Cost is tracked over a sliding window of configurable days. As old days fall off the window, their spend frees up.</p>
+      <div class="window-timeline">
+        <div class="window-day outside" style="height:25%"></div>
+        <div class="window-day outside" style="height:40%"></div>
+        <div class="window-day outside" style="height:35%"></div>
+        <div class="window-day outside" style="height:20%"></div>
+        <div class="window-day in-window" style="height:60%"></div>
+        <div class="window-day in-window" style="height:45%"></div>
+        <div class="window-day in-window" style="height:80%"></div>
+        <div class="window-day in-window" style="height:55%"></div>
+        <div class="window-day in-window" style="height:70%"></div>
+        <div class="window-day in-window" style="height:40%"></div>
+        <div class="window-day in-window" style="height:30%"></div>
+      </div>
+      <div class="window-labels">
+        <span>← older usage (freed up)</span>
+        <span>current rolling window →</span>
+      </div>
+      <div style="display:flex; gap:12px; margin-top:12px">
+        <div class="window-bracket" style="flex:0.4">
+          <div class="bracket-line" style="background:var(--border); opacity:0.5"></div>
+          <div class="bracket-label" style="color:var(--text-dim)">Outside window</div>
+        </div>
+        <div class="window-bracket" style="flex:0.6">
+          <div class="bracket-line"></div>
+          <div class="bracket-label">Counted (N days)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="enforcement-visual">
+      <h3>Budget Enforcement Behaviour</h3>
+      <div class="budget-bar-container">
+        <div class="budget-bar-label">
+          <span>0%</span>
+          <span>Cost Centre Budget Cap</span>
+          <span>100%</span>
+        </div>
+        <div class="budget-bar">
+          <div class="budget-bar-fill" style="width:85%; background: linear-gradient(90deg, var(--accent-system) 0%, var(--accent-warn) 60%, var(--accent-security) 100%)"></div>
+          <div class="budget-bar-marker" style="left:50%" data-label="50% alert"></div>
+          <div class="budget-bar-marker" style="left:80%" data-label="80% alert"></div>
+        </div>
+      </div>
+      <div class="budget-states">
+        <div class="budget-state">
+          <div class="state-icon">✅</div>
+          <div class="state-label">Normal</div>
+          <div class="state-desc">Under thresholds, all keys active</div>
+        </div>
+        <div class="budget-state">
+          <div class="state-icon">⚠️</div>
+          <div class="state-label">Soft Alert</div>
+          <div class="state-desc">Configurable thresholds (50%, 80%); notifications sent</div>
+        </div>
+        <div class="budget-state">
+          <div class="state-icon">🛑</div>
+          <div class="state-label">Hard Stop</div>
+          <div class="state-desc">Budget cap hit — all cost centre keys blocked until CCO tops up budget</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FEATURES -->
+  <div class="section" id="features">
+    <div class="section-header">
+      <h2>Functional Requirements</h2>
+      <p>Platform capabilities organised by surface area.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <h4>Authentication <span class="badge badge-system">System</span></h4>
+        <ul>
+          <li>Production: Corporate SSO (OIDC/SAML)</li>
+          <li>PoC: Hard-coded usernames and passwords</li>
+          <li>No external auth dependencies for PoC</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Developer Dashboard <span class="badge badge-dev">Developer</span></h4>
+        <ul>
+          <li>View all active keys (one per cost centre, across multiple cost centres)</li>
+          <li>Key status: Active, Expired, Revoked, Stopped, Pending</li>
+          <li>Current spend vs limit within rolling period</li>
+          <li>When budget becomes available again if stopped</li>
+          <li>Usage metrics per key (tokens, cost)</li>
+          <li>Retrieve key credentials (re-copy setup instructions)</li>
+          <li>Revoke own keys</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Request Management <span class="badge badge-admin">Admin</span></h4>
+        <ul>
+          <li>View all pending requests across all cost centres</li>
+          <li>Approve/reject any request (bypasses owner)</li>
+          <li>Bulk approve/reject</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Cost Centre Management <span class="badge badge-admin">Admin</span></h4>
+        <ul>
+          <li>Create new cost centres</li>
+          <li>Assign/remove Cost Centre Owners</li>
+          <li>Deactivate cost centres (revokes all keys)</li>
+          <li>Unarchive a cost centre (restores keys for current org members; expired keys remain expired)</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Key Management <span class="badge badge-admin">Admin</span></h4>
+        <ul>
+          <li>View all active keys across organisation</li>
+          <li>Revoke any key (triggers cloud cleanup)</li>
+          <li>Set global policies: max lifetime, models, rate limits</li>
+          <li>Search/filter by developer, cost centre, status</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Cost & Usage Dashboard <span class="badge badge-admin">Admin</span></h4>
+        <ul>
+          <li>View aggregate usage and cost</li>
+          <li>Break down by cost centre code</li>
+          <li>Break down by developer/team</li>
+          <li>Set budget alerts per cost centre or globally</li>
+          <li>Export CSV report for a time period (cost per cost centre/cost centre)</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Configuration <span class="badge badge-admin">Admin</span></h4>
+        <ul>
+          <li>Cloud account/region configuration</li>
+          <li>Allowed Claude models (Opus, Sonnet, Haiku)</li>
+          <li>Default key expiry and limit policies</li>
+          <li>Notification settings (Slack workspace, email server)</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Approval & Key Config <span class="badge badge-owner">Owner</span></h4>
+        <ul>
+          <li>View pending requests for their cost centre(s)</li>
+          <li>Any single CCO can approve (consensus not required)</li>
+          <li>Approve with constraints (rolling cost limit, budget, models, expiry)</li>
+          <li>Reject with reason (developer can resubmit)</li>
+          <li>Modify constraints on existing keys (developer notified)</li>
+          <li>Revoke keys in their cost centre</li>
+          <li>Archive cost centre (disables keys, auto-rejects pending requests)</li>
+          <li>Unarchive own cost centre (restores keys for current org members)</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Cost Centre Usage View <span class="badge badge-owner">Owner</span></h4>
+        <ul>
+          <li>Developer activity table (keys, status, spend vs limits)</li>
+          <li>Model usage breakdown per developer</li>
+          <li>Token consumption (input/output/total)</li>
+          <li>Cost tracking and trends over time</li>
+          <li>Charts: usage trends, burn-rate, model mix, top consumers</li>
+          <li>Budget management: cap (dollars), remaining, % used; can top up</li>
+          <li>Export CSV report for their cost centre(s)</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Alert Configuration <span class="badge badge-owner">Owner</span></h4>
+        <ul>
+          <li>Email and Slack (channel or DM) — notifications only, no approval workflows</li>
+          <li>cost centre budget threshold alerts (50%, 80%, 100%)</li>
+          <li>Per-developer threshold alerts</li>
+          <li>Unusual usage spike alerts</li>
+          <li>Key lifecycle: expiry reminders, new requests</li>
+          <li>Enable/disable individual alert types</li>
+          <li>Set alert recipients</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- BACKEND -->
+  <div class="section" id="backend">
+    <div class="section-header">
+      <h2>Automated Backend</h2>
+      <p>All cloud resources are managed programmatically. No manual console interaction required after initial setup.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <h4>Key Provisioning <span class="badge badge-system">Auto</span></h4>
+        <ul>
+          <li>Automatically create credentials when key is approved</li>
+          <li>Tag resources: cost centre code, developer, created date, expiry</li>
+          <li>Target: under 10 seconds</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Access Control <span class="badge badge-system">Auto</span></h4>
+        <ul>
+          <li>Restrict keys to specific models per configuration</li>
+          <li>Enforce model restrictions at cloud layer (not just in app)</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Key Lifecycle <span class="badge badge-system">Auto</span></h4>
+        <ul>
+          <li>Automatic expiry enforcement</li>
+          <li>Revocation: clean up all cloud resources</li>
+          <li>Rolling period: sliding window, oldest spend falls off</li>
+          <li>SSO offboarding: keys auto-disabled when user removed from identity provider</li>
+          <li>Developer revocation: immediate deactivate + flag for cleanup</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Cost & Budget Enforcement <span class="badge badge-system">Auto</span></h4>
+        <ul>
+          <li>Track cost per key, per developer, per cost centre (in dollars)</li>
+          <li>Cost calculated from token consumption + model pricing (from AWS)</li>
+          <li>Three enforcement levels (all apply simultaneously):</li>
+          <li>→ Per-key rolling period: only that key stopped</li>
+          <li>→ Per-key lifetime budget: key stopped permanently</li>
+          <li>→ Cost Centre Budget Cap: all cost centre keys stopped</li>
+          <li>Soft alerts at configurable thresholds</li>
+          <li>Per-key rolling: auto re-enable when spend falls outside window</li>
+          <li>Cost centre cap: re-enable when CCO increases budget</li>
+          <li>Developer notified on stop/re-enable</li>
+        </ul>
+      </div>
+
+      <div class="feature-card">
+        <h4>Guardrails <span class="badge badge-system" style="opacity:0.5">Future</span></h4>
+        <ul>
+          <li>Content filtering per cost centre or globally</li>
+          <li>Configurable by admin</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- NFR -->
+  <div class="section" id="nfr">
+    <div class="section-header">
+      <h2>Non-Functional Requirements</h2>
+      <p>Quality attributes and operational requirements.</p>
+    </div>
+
+    <div class="nfr-grid">
+      <div class="nfr-card">
+        <h4>🔒 Security</h4>
+        <ul>
+          <li>All keys encrypted at rest and in transit</li>
+          <li>Keys retrievable after creation (secured by authentication)</li>
+          <li>Audit log of all key operations — retained indefinitely</li>
+          <li>Audit logs accessible to Administrators only</li>
+          <li>Cloud-level audit trail integration</li>
+          <li>Role-based access control (RBAC)</li>
+          <li>OWASP Top 10 compliance</li>
+        </ul>
+      </div>
+
+      <div class="nfr-card">
+        <h4>📈 Scalability</h4>
+        <ul>
+          <li>Support ~300 developers and 1000s of keys</li>
+          <li>Async key provisioning if needed</li>
+        </ul>
+      </div>
+
+      <div class="nfr-card">
+        <h4>🔄 Reliability</h4>
+        <ul>
+          <li>Handle cloud API failures gracefully (retry with backoff)</li>
+          <li>Reconciliation to detect drift between app state and cloud state</li>
+        </ul>
+      </div>
+
+      <div class="nfr-card">
+        <h4>👁️ Observability</h4>
+        <ul>
+          <li>Application logging and monitoring</li>
+          <li>Alerts on failed provisioning, expired keys, budget thresholds</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- DECISIONS -->
+  <div class="section" id="decisions">
+    <div class="section-header">
+      <h2>Resolved Decisions</h2>
+      <p>Key architectural and product decisions that have been made.</p>
+    </div>
+
+    <table class="decisions-table">
+      <thead>
+        <tr><th>#</th><th>Decision</th><th>Resolution</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Authentication</td><td>Corporate SSO (production); hard-coded users (PoC)</td></tr>
+        <tr><td>2</td><td>Approvers</td><td>Cost Centre Owners approve for their cost centres (any single CCO suffices); Admins can bypass</td></tr>
+        <tr><td>3</td><td>Multi-region</td><td>Single region for now</td></tr>
+        <tr><td>4</td><td>Model restrictions</td><td>Yes — per-key, set by Cost Centre Owner at approval time</td></tr>
+        <tr><td>5</td><td>Budget limits</td><td>Hard stops (block keys at cap) with soft alerts before</td></tr>
+        <tr><td>6</td><td>cost centre code validation</td><td>Free-text for now; future integration possible</td></tr>
+        <tr><td>7</td><td>Multi-account</td><td>Single account for now</td></tr>
+        <tr><td>8</td><td>Key expiration</td><td>Long-lived with configurable expiry (set by Cost Centre Owner per key)</td></tr>
+        <tr><td>9</td><td>Budget period</td><td>Rolling window of configurable days (not fixed calendar periods)</td></tr>
+        <tr><td>10</td><td>Scale</td><td>~300 developers</td></tr>
+        <tr><td>11</td><td>Notifications</td><td>Email and Slack integration (alerts/notifications only; no approval workflows via Slack)</td></tr>
+        <tr><td>12</td><td>Data residency</td><td>Australia (ap-southeast-2) in the first instance</td></tr>
+        <tr><td>13</td><td>Slack workspace</td><td>Configurable in app settings</td></tr>
+        <tr><td>14</td><td>Keys per cost centre per developer</td><td>One key per cost centre per developer; multiple keys across different cost centres</td></tr>
+        <tr><td>15</td><td>Multiple Cost Centre Owners</td><td>Yes — a cost centre can have multiple owners; any one can approve</td></tr>
+        <tr><td>16</td><td>Role overlap</td><td>Users can hold multiple roles (e.g., Cost Centre Owner + Developer)</td></tr>
+        <tr><td>17</td><td>Throttle behaviour</td><td>Hard stop (blocked), not slowdown. Portal shows status and when budget returns</td></tr>
+        <tr><td>18</td><td>Model availability in region</td><td>Out of scope for app — initial AWS setup handled externally</td></tr>
+        <tr><td>19</td><td>Budget units</td><td>Dollars (not tokens)</td></tr>
+        <tr><td>20</td><td>Budget cap ownership</td><td>Cost Centre Budget Cap set and managed by CCO</td></tr>
+        <tr><td>21</td><td>Self-approval</td><td>CCO requesting a key for their own cost centre is auto-approved</td></tr>
+        <tr><td>22</td><td>Key rotation</td><td>Not required (removed from scope)</td></tr>
+        <tr><td>23</td><td>Key retrieval</td><td>Keys retrievable after creation (secured by authentication)</td></tr>
+        <tr><td>24</td><td>Audit log retention</td><td>Indefinite</td></tr>
+        <tr><td>25</td><td>Audit log access</td><td>Administrators only</td></tr>
+        <tr><td>26</td><td>Cost centre visibility</td><td>Developers can see all non-archived cost centres</td></tr>
+        <tr><td>27</td><td>User offboarding</td><td>Keys auto-disabled when user removed from SSO/identity provider</td></tr>
+        <tr><td>28</td><td>Archive behaviour</td><td>Archiving auto-rejects pending requests; unarchiving restores keys only for current org members</td></tr>
+        <tr><td>29</td><td>Global model changes</td><td>Removing a model globally revokes that model access from all existing keys</td></tr>
+        <tr><td>30</td><td>CCO delegation/absence</td><td>Admin bypass is sufficient; no separate escalation mechanism</td></tr>
+        <tr><td>31</td><td>Break-glass admin</td><td>Default super admin configured outside the UI (no UI needed)</td></tr>
+        <tr><td>32</td><td>Cost centre definition</td><td>A cost centre can represent a project, department, team, or any organisational unit</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- SETUP -->
+  <div class="section" id="setup">
+    <div class="section-header">
+      <h2>One-Time Initial Setup</h2>
+      <p>Pre-requisites before the application can function.</p>
+    </div>
+
+    <div class="setup-steps">
+      <h3>Infrastructure Administrator Must:</h3>
+      <div class="setup-step">
+        <div class="ss-num">1</div>
+        <p>Enable Bedrock model access in the target AWS account/region</p>
+      </div>
+      <div class="setup-step">
+        <div class="ss-num">2</div>
+        <p>Complete the Anthropic use-case form (required once per AWS account)</p>
+      </div>
+      <div class="setup-step">
+        <div class="ss-num">3</div>
+        <p>Create a service identity for the application with appropriate cloud permissions</p>
+      </div>
+      <div class="setup-step">
+        <div class="ss-num">4</div>
+        <p>Activate cost tracking mechanisms for cost centre-level attribution</p>
+      </div>
+      <div class="setup-step">
+        <div class="ss-num">5</div>
+        <p>Deploy the application</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.section).classList.add('active');
+  });
+});
+</script>
+</body>
+</html>
