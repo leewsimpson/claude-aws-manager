@@ -10,13 +10,13 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 **Goal:** Skeleton project that runs locally with `docker compose up`.
 
-- [ ] Initialise monorepo structure (`/backend`, `/frontend`, `/docker`)
-- [ ] Backend: FastAPI project with health endpoint, Pydantic settings, project config (Poetry/uv)
-- [ ] Frontend: React + Vite + TypeScript project with proxy to backend
-- [ ] PostgreSQL service with initial empty schema
-- [ ] Docker Compose: backend + frontend + db, all wired together
-- [ ] SQLAlchemy + Alembic setup (engine, session, migration scaffold)
-- [ ] Verify: `docker compose up` → frontend loads, hits backend health endpoint, backend connects to db
+- [x] Initialise monorepo structure (`/backend`, `/frontend`, `/docker`)
+- [x] Backend: FastAPI project with health endpoint, Pydantic settings, project config (uv)
+- [x] Frontend: React + Vite + TypeScript project with proxy to backend
+- [x] PostgreSQL service with initial empty schema
+- [x] Docker Compose: backend + frontend + db, all wired together
+- [x] SQLAlchemy + Alembic setup (engine, session, migration scaffold)
+- [x] Verify: `docker compose up` → frontend loads, hits backend health endpoint, backend connects to db
 
 **Outputs:** Running local stack with no business logic.
 
@@ -26,7 +26,7 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 **Goal:** Core domain tables and PoC authentication so all subsequent work has a user context.
 
-- [ ] Database models (SQLAlchemy):
+- [x] Database models (SQLAlchemy):
   - `User` (id, username, display_name, email, password_hash, roles, is_active)
   - `CostCentre` (id, code, name, description, budget_cap, status, created_by)
   - `CostCentreOwner` (user_id, cost_centre_id, assigned_at, assigned_by)
@@ -34,12 +34,12 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
   - `Key` (id, key_request_id, developer_id, cost_centre_id, iam_username, credential_id, status, allowed_models, rolling_limit, rolling_period_days, lifetime_budget, lifetime_spend, expires_at)
   - `AuditLog` (id, actor_id, action, entity_type, entity_id, old_values JSONB, new_values JSONB, ip_address)
   - `GlobalSetting` (key, value JSONB, updated_by) — key-value store for region, allowed models, default key expiry/limits
-- [ ] Alembic initial migration
-- [ ] Seed data: hard-coded users (`admin/admin`, `dev1/dev1`, `dev2/dev2`, `ccowner1/ccowner1`) and `global_settings` defaults (region, allowed models, default expiry/limits)
-- [ ] Hard-coded auth: login endpoint (username/password check against seed data), JWT token issuance
-- [ ] Auth middleware: extract user from JWT, inject into request context
-- [ ] Auth dependency: `get_current_user`, role-checking decorators/dependencies
-- [ ] Frontend: login page, auth context/provider, protected route wrapper
+- [x] Alembic initial migration
+- [x] Seed data: hard-coded users (`admin/admin`, `dev1/dev1`, `dev2/dev2`, `ccowner1/ccowner1`) and `global_settings` defaults (region, allowed models, default expiry/limits)
+- [x] Hard-coded auth: login endpoint (username/password check against seed data), JWT token issuance
+- [x] Auth middleware: extract user from JWT, inject into request context
+- [x] Auth dependency: `get_current_user`, role-checking decorators/dependencies
+- [x] Frontend: login page, auth context/provider, protected route wrapper
 
 **Outputs:** Users can log in, JWT protects all API routes, role context available everywhere.
 

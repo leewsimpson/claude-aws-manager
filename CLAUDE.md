@@ -4,7 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current State
 
-This repo is **documentation/planning only — no application code exists yet**. The `/docs` and `/research` folders are the canonical specification; the PoC is to be built against them following `docs/implementation-plan.md` (Phases 1–11). When you start implementing, scaffold the monorepo structure described below rather than expecting it to already exist.
+**Phase 2 complete** (DB models + hard-coded auth) — see `docs/implementation-log.md` for live progress. Monorepo: `/backend` (FastAPI), `/frontend` (React+Vite), `/docker`, root `docker-compose.yml`. The **7 core domain tables** exist (`users`, `cost_centres`, `cost_centre_owners`, `key_requests`, `keys`, `audit_log`, `global_settings`) via the Alembic initial migration; deferred-model tables (`inference_profiles` → P5, `usage_snapshots`/`pricing_cache` → P7, `alert_*` → P9) arrive with their phase. **Auth works:** `POST /api/auth/login` + `GET /api/auth/me` (JWT/HS256), with reusable `get_current_user` + `require_roles(*roles)` in `app/core/deps.py` — use these to protect every new endpoint. Seed personas: `admin/admin`, `dev1/dev1`, `dev2/dev2`, `ccowner1/ccowner1` (cco+developer). **Next: Phase 3** (cost-centre management — the first `audit_log` writer). The `/docs` and `/research` folders remain the canonical specification; build against them following `docs/implementation-plan.md` and record decisions/retros in `docs/implementation-log.md`.
+
+### Local Dev — Build & Run
+
+```bash
+docker compose up           # from repo root: db :5432, backend :8000, frontend :5173
+# frontend → http://localhost:5173 ; backend health → http://localhost:8000/api/health
+```
+
+Both services bind-mount source with live reload (uvicorn `--reload`, vite dev). The backend compose `command` runs `alembic upgrade head && python -m app.seed` before uvicorn (idempotent seed). Backend-only, outside Docker: `cd backend && uv sync && uv run uvicorn app.main:app --reload` (needs a reachable Postgres or health reports `database:"error"`). Backend tests: `cd backend && uv run pytest` (uses a separate `claudeaws_test` DB it creates; needs Postgres on `localhost:5432`). Frontend: `npm run build`, `npm run test` (Vitest).
+
+**Scaffolding decisions** (rationale in `docs/implementation-log.md`): backend uses **uv** (not Poetry); Python pinned to **3.12** (`requires-python >=3.12,<3.13`); DB driver **psycopg v3** (`postgresql+psycopg://`); `docker-compose.yml` lives at repo root, Dockerfiles in `/docker`. **Gotchas:** (1) list/dict `Settings` fields supplied via env must use `Annotated[list[str], NoDecode]` + a splitting validator — pydantic-settings JSON-decodes them at the source before validators run (crashed `CORS_ORIGINS` on first boot). (2) After changing backend deps, recreate with `docker compose up -d --build --force-recreate --renew-anon-volumes backend` — the anonymous `/app/.venv` volume otherwise shadows the rebuilt venv (`ModuleNotFoundError`). (3) Generate Alembic migrations against an **empty** schema — `create_all` against the dev DB makes autogenerate diff to nothing; keep `create_all` to the test DB.
 
 ** KEEP ALL DOCUMENTATION CONSISTENT, MINIMISE DUPLICATION, NOT VERBOSE **
 
@@ -66,5 +77,7 @@ Email/Slack notifications (in-app alerts only for PoC), CSV export, Bedrock Guar
 - `docs/data-model.md` — canonical DB schema.
 - `docs/design-decisions.md` — the 11 numbered architectural decisions with rationale (read before changing architecture).
 - `docs/implementation-plan.md` — the 11-phase build sequence with per-phase checklists.
+- `docs/implementation-log.md` — live build progress, decisions taken during implementation, and per-phase retros.
 - `docs/tech-spike.md` — hands-on AWS validation items to confirm before/during the build.
+- `docs/test-strategy.md` — automation test strategy (unit, integration, UI, E2E) aligned to the mock-first phased build.
 - `research/01`–`research/09` — supporting research on Bedrock config, IAM, model access, cost tracking, auth/SSO, guardrails, developer setup, and Bedrock API keys.

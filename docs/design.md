@@ -309,4 +309,5 @@ Inference profiles are created on-demand, not eagerly:
 - [Data Model](data-model.md) — Database schema, entity definitions, and relationships
 - [Design Decisions](design-decisions.md) — All design decisions with rationale
 - [Tech Spike](tech-spike.md) — Hands-on validation items before PoC build
+- [Test Strategy](test-strategy.md) — Automation test strategy across unit, integration, UI, and E2E
 - [Research](../research/) — Supporting research on AWS Bedrock, IAM, cost tracking, and more

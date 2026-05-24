@@ -1,0 +1,23 @@
+"""ORM models. Importing this package registers every table on ``Base.metadata``.
+
+Alembic autogeneration and the test suite rely on importing ``app.models`` so
+that all tables are present before ``Base.metadata`` is read.
+"""
+
+from app.models.audit_log import AuditLog
+from app.models.cost_centre import CostCentre
+from app.models.cost_centre_owner import CostCentreOwner
+from app.models.global_setting import GlobalSetting
+from app.models.key import Key
+from app.models.key_request import KeyRequest
+from app.models.user import User
+
+__all__ = [
+    "AuditLog",
+    "CostCentre",
+    "CostCentreOwner",
+    "GlobalSetting",
+    "Key",
+    "KeyRequest",
+    "User",
+]

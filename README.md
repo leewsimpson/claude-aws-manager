@@ -26,4 +26,5 @@ Developers use provisioned bearer tokens in their terminal to call AWS Bedrock d
 - [Data Model](docs/data-model.md)
 - [Design Decisions](docs/design-decisions.md)
 - [Implementation Plan](docs/implementation-plan.md)
+- [Implementation Log](docs/implementation-log.md)
 - [Tech Spike](docs/tech-spike.md)

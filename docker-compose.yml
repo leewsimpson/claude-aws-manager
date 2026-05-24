@@ -1,0 +1,62 @@
+# Local development stack for the Claude Code AWS Bedrock Manager.
+# Run from the repo root:  docker compose up
+#
+#   frontend : http://localhost:5173  (Vite dev server, proxies /api -> backend)
+#   backend  : http://localhost:8000  (FastAPI, health at /api/health)
+#   db       : localhost:5432         (PostgreSQL 16)
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: claudeaws
+      POSTGRES_PASSWORD: claudeaws
+      POSTGRES_DB: claudeaws
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claudeaws -d claudeaws"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://claudeaws:claudeaws@db:5432/claudeaws
+      AWS_MODE: mock
+      CORS_ORIGINS: http://localhost:5173
+    # Apply migrations and seed (idempotent) before serving. PATH includes
+    # the venv (set in the Dockerfile) so alembic/python/uvicorn resolve.
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+    ports:
+      - "8000:8000"
+    volumes:
+      # Source mount for live reload; anonymous volume keeps the image's venv.
+      - ./backend:/app
+      - /app/.venv
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      # Source mount for live reload; anonymous volume keeps the image's deps.
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
