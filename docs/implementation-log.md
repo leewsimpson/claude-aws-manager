@@ -473,3 +473,10 @@ A full backend + frontend review was run before starting Phase 6 and every findi
 - Stronger tests: reject asserts the POST body carries `rejection_reason`; new tests for token/env-var rendering, developer-not-seeing-reviewer-controls, and clipboard copy (+ standalone `TokenReveal.test.tsx`).
 
 **Still open / accepted:** in-app (SPA) navigation away from a shown token is mitigated by the warning + `beforeunload` but not hard-blocked (needs a React Router data router); the AWS-compensation is best-effort by design (a residual orphan beats masking the original error) and will be reconciled against real AWS in Phase 11.
+
+### Frontend design pass — "Bedrock Control Room" (via `frontend-design` skill)
+
+Applied a cohesive, committed **dark-only technical-console** visual system across the entire frontend — **CSS-only**, no markup/behaviour/test changes (every existing class name preserved). Tokens in `index.css` (graphite surfaces, warm-amber accent, semantic colours, hairlines, dot-grid + top-glow atmosphere); component styles in `App.css`; IBM Plex Mono + IBM Plex Sans fonts. Build clean, **24 Vitest still green**. Documented as a convention in CLAUDE.md.
+
+- **Pixels finally verified.** Connected the Chrome extension and loaded the running app at `:5173` — login, home, cost-centres, key-requests all render correctly. This closes the "browser render unverified" gap flagged in **every** prior phase (P1–P5).
+- **Latent bug found + fixed in the process:** the **frontend container had been serving a broken app since Phase 2** — its anonymous `/app/node_modules` volume predated the P2 `react-router-dom`/`@tanstack/react-query` additions, so Vite threw `Failed to resolve import` while host `npm run build`/tests passed. Nobody noticed because the browser was never opened before now. Fixed via `docker compose up -d --build --force-recreate --renew-anon-volumes frontend`; recorded as Gotcha (4) in CLAUDE.md. **Lesson: "host build passes" ≠ "the dockerised dev server works" — actually open the browser each phase.**
