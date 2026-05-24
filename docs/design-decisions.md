@@ -52,7 +52,7 @@ Two-layer approach:
 
 **Sub-decisions (all resolved):**
 - **Inference profiles:** One per cost centre **per model** (since each profile binds to a single model). If CC-1234 allows Sonnet + Haiku, that's 2 profiles. Claude Code's `modelOverrides` setting maps each model to its CC-specific profile ARN — confirmed working with bearer token auth (see below).
-- **Polling frequency:** Every 5 minutes. Sufficient for budget enforcement; overshoot is bounded.
+- **Polling frequency:** Every 2 minutes (see [Decision #6](#6-budget-enforcement-timing)). Sufficient for budget enforcement; overshoot is bounded.
 - **Cost calculation:** App-calculated (tokens × pricing). Cost Explorer has 24-48h lag — incompatible with rolling budget enforcement.
 - **Pricing storage:** Config file, not hardcoded. Refreshed periodically. Start with hardcoded values for PoC, move to AWS Price List API later.
 
@@ -86,6 +86,9 @@ Since Bedrock API Keys create an IAM user underneath (Decision #1), we attach an
 - `AmazonBedrockLimitedAccess` is replaced with a scoped custom policy
 
 **Example policy (Sonnet + Haiku only, with inference profile support):**
+
+Note: Uses exact model ARNs per [Decision #13](#13-iam-policy-model-specificity).
+
 ```json
 {
   "Version": "2012-10-17",
@@ -95,8 +98,8 @@ Since Bedrock API Keys create an IAM user underneath (Decision #1), we attach an
       "Effect": "Allow",
       "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
       "Resource": [
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-*",
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5",
         "arn:aws:bedrock:*:*:application-inference-profile/*"
       ]
     },
@@ -185,7 +188,7 @@ This decision is resolved by Decision #1. Each long-term Bedrock API Key creates
 
 ## 6. Budget Enforcement Timing ✅ DECIDED
 
-**Decision: Poll CloudWatch every 5 minutes (aligned with Decision #2)**
+**Decision: Poll CloudWatch every 2 minutes (aligned with Decision #2)**
 
 The cost tracking polling loop (Decision #2) doubles as budget enforcement. Each poll cycle:
 1. Fetch token counts from CloudWatch per inference profile (CC-level)
@@ -195,7 +198,7 @@ The cost tracking polling loop (Decision #2) doubles as budget enforcement. Each
 5. If per-key limit exceeded → disable that specific key
 6. Send alerts at configurable thresholds (50%, 80%, 100%)
 
-**Accepted trade-off:** A developer could overshoot the budget by up to ~5 minutes of usage before enforcement kicks in. Worst case with N active developers in a CC is ~5 minutes × N developers. Acceptable for PoC; can tighten polling for CCs near their budget threshold in production.
+**Accepted trade-off:** A developer could overshoot the budget by up to ~2 minutes of usage before enforcement kicks in. Worst case with N active developers in a CC is ~2 minutes × N developers. Acceptable for PoC; can tighten polling for CCs near their budget threshold in production.
 
 **Remaining sub-decision:**
 - Should we pre-calculate "estimated remaining budget" for the developer dashboard? (Nice-to-have, can defer to production)
@@ -281,19 +284,61 @@ Since the PoC provisions real AWS credentials (#8), the app needs a real AWS int
 
 ---
 
+## 12. Per-Key Usage Data Source ✅ DECIDED
+
+**Decision: Hybrid — CloudWatch for CC-level budget enforcement, invocation logs for per-key drill-down**
+
+CloudWatch metrics are dimensioned by inference profile (one per CC per model), so they only provide CC-level totals. Per-key (per-developer) attribution requires a second data source.
+
+**Two data paths:**
+
+| Path | Source | Granularity | Latency | Used for |
+|------|--------|-------------|---------|----------|
+| CloudWatch metrics | `GetMetricStatistics` per inference profile | CC-level per model | Near real-time | CC budget enforcement, CC-level dashboards |
+| Model invocation logs | S3 or CloudWatch Logs (parsed by background job) | Per-request, per-IAM-user | Minutes | Per-key spend tracking, per-developer drill-down, per-key budget enforcement |
+
+**How it works:**
+1. Background scheduler polls CloudWatch every 2 min → stores `usage_snapshots` with `key_id = NULL`, `source = 'cloudwatch'`
+2. Separate background job parses invocation logs → stores `usage_snapshots` with `key_id` populated, `source = 'invocation_log'`
+3. CC-level budget enforcement uses CloudWatch rows (fast path)
+4. Per-key rolling/lifetime limits use invocation log rows when available
+5. Developer dashboard shows per-key spend from invocation log data
+
+**PoC simplification:** If invocation log parsing proves too complex for the PoC timeline, fall back to proportional estimation (split CC-level CloudWatch data equally across active keys in that CC). Full invocation log parsing can be promoted from nice-to-have.
+
+**See:** [research/04](../research/04-cost-tracking-budget-enforcement.md)
+
+---
+
+## 13. IAM Policy Model Specificity ✅ DECIDED
+
+**Decision: Use exact model ARNs in IAM policies, not wildcards**
+
+When provisioning a key, the platform generates IAM policy resource ARNs using the exact model IDs approved for that key (e.g., `anthropic.claude-sonnet-4-6`), not wildcards (e.g., `anthropic.claude-sonnet-*`).
+
+**Why:**
+- Wildcards like `anthropic.claude-sonnet-*` would grant access to future model versions automatically — a CCO who approved Sonnet 4 didn't approve a hypothetical more expensive Sonnet 5
+- Exact ARNs require the platform to update policies when new model versions are adopted, but this is already handled by the admin model management flow
+
+**Trade-off:** When AWS releases a new model version, an Admin must add it to the global allowed models list, and CCOs must update their keys. This is acceptable — it's a deliberate governance control.
+
+---
+
 ## Decision Status
 
 | # | Decision | Status |
 |---|----------|--------|
 | 1 | Credential Strategy | ✅ **Bedrock API Keys (long-term)** |
-| 2 | Cost Tracking | ✅ **CloudWatch Metrics per inference profile + AWS Price List API** |
-| 3 | Model Restrictions | ✅ **IAM Policy on underlying user** |
+| 2 | Cost Tracking | ✅ **CloudWatch Metrics per inference profile + invocation logs** |
+| 3 | Model Restrictions | ✅ **IAM Policy on underlying user (exact model ARNs)** |
 | 4 | Technology Stack | ✅ **Python+FastAPI / React+Vite / PostgreSQL / Docker Compose** |
 | 5 | Key-to-Developer Attribution | ✅ **Automatic via IAM user per key** |
-| 6 | Budget Enforcement Timing | ✅ **Poll every 1-2 min (same loop as #2)** |
+| 6 | Budget Enforcement Timing | ✅ **Poll every 2 min (same loop as #2)** |
 | 7 | Notification Infrastructure | ✅ **Deferred to production** |
 | 8 | PoC Scope | ✅ **Defined — real AWS, includes charts + budget alerts** |
 | 9 | AWS Account Strategy | ✅ **Dedicated AWS account** |
 | 10 | Key Storage & Security | ✅ **Don't store token — display once, regenerate if lost** |
 | 11 | Real AWS vs Mock | ✅ **Hybrid — mock default, real AWS for integration** |
+| 12 | Per-Key Usage Data | ✅ **Hybrid — CloudWatch (CC-level) + invocation logs (per-key)** |
+| 13 | IAM Policy Model Specificity | ✅ **Exact model ARNs, not wildcards** |
 

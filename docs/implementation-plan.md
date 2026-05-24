@@ -25,14 +25,15 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 **Goal:** Core domain tables and PoC authentication so all subsequent work has a user context.
 
 - [ ] Database models (SQLAlchemy):
-  - `User` (id, username, display_name, role — admin/developer/cco)
-  - `CostCentre` (id, code, name, budget_cap, status — active/archived)
-  - `CostCentreOwner` (user_id, cost_centre_id — many-to-many)
-  - `KeyRequest` (id, developer_id, cost_centre_id, status, justification, rejection_reason, constraints JSON)
-  - `ProvisionedKey` (id, key_request_id, developer_id, cost_centre_id, iam_username, credential_id, status, expiry, constraints JSON)
-  - `AuditLog` (id, actor_id, action, resource_type, resource_id, metadata JSON, timestamp)
+  - `User` (id, username, display_name, email, password_hash, roles, is_active)
+  - `CostCentre` (id, code, name, description, budget_cap, status, created_by)
+  - `CostCentreOwner` (user_id, cost_centre_id, assigned_at, assigned_by)
+  - `KeyRequest` (id, developer_id, cost_centre_id, status, justification, rejection_reason, reviewed_by, approved_constraints JSONB)
+  - `Key` (id, key_request_id, developer_id, cost_centre_id, iam_username, credential_id, status, allowed_models, rolling_limit, rolling_period_days, lifetime_budget, lifetime_spend, expires_at)
+  - `AuditLog` (id, actor_id, action, entity_type, entity_id, old_values JSONB, new_values JSONB, ip_address)
+  - `GlobalSetting` (key, value JSONB, updated_by) — key-value store for region, allowed models, default key expiry/limits
 - [ ] Alembic initial migration
-- [ ] Seed data: hard-coded users (`admin/admin`, `dev1/dev1`, `dev2/dev2`, `ccowner1/ccowner1`)
+- [ ] Seed data: hard-coded users (`admin/admin`, `dev1/dev1`, `dev2/dev2`, `ccowner1/ccowner1`) and `global_settings` defaults (region, allowed models, default expiry/limits)
 - [ ] Hard-coded auth: login endpoint (username/password check against seed data), JWT token issuance
 - [ ] Auth middleware: extract user from JWT, inject into request context
 - [ ] Auth dependency: `get_current_user`, role-checking decorators/dependencies
@@ -71,9 +72,12 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
   - `reset_key(credential_id) → new_bearer_token`
   - `update_model_policy(iam_username, allowed_models)`
   - `create_inference_profile(cost_centre, model) → profile_arn`
+  - `delete_inference_profile(profile_arn)`
   - `get_usage_metrics(inference_profile_arn, period) → token_counts`
+  - `parse_invocation_logs(since) → per_key_usage` (for per-key attribution, see [design-decisions.md](design-decisions.md#12-per-key-usage-data-source))
 - [ ] Mock implementation: returns fake credential IDs/tokens, stores state in-memory
 - [ ] Real implementation: boto3 calls (IAM CreateUser, AttachUserPolicy, CreateServiceSpecificCredential, etc.)
+- [ ] Basic retry logic: wrap boto3 calls with exponential backoff (e.g., `tenacity` library)
 - [ ] Config switch: `AWS_MODE=mock|real` environment variable
 - [ ] Unit tests for mock layer
 
@@ -91,7 +95,8 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
   - `POST /api/key-requests/{id}/approve` — CCO/admin approves (with constraints: models, rolling limit, lifetime budget, expiry)
   - `POST /api/key-requests/{id}/reject` — CCO/admin rejects (with reason)
   - Auto-approval logic: if requester is CCO of the target cost centre, skip approval
-- [ ] On approval → call AWS layer to provision key → store credential_id + iam_username in DB → return bearer token (once)
+- [ ] `InferenceProfile` model (id, cost_centre_id, model_id, profile_arn, profile_name, status) — provisioning needs to persist profiles created on approval
+- [ ] On approval → for each approved model, ensure a CC+model inference profile exists (create via AWS layer + persist if not) → call AWS layer to provision key → store credential_id + iam_username in DB → return bearer token (once)
 - [ ] Validation: one active key per developer per cost centre
 - [ ] Audit log entries for all state transitions
 - [ ] Frontend — Developer:
@@ -137,10 +142,12 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 **Goal:** Track token usage, calculate costs, enforce rolling and lifetime budgets.
 
 - [ ] Usage data models:
-  - `UsageSnapshot` (key_id, cost_centre_id, model, input_tokens, output_tokens, cost, timestamp)
-- [ ] Pricing config: model → price-per-token (input/output), loaded from config file
+  - `UsageSnapshot` (key_id (nullable), inference_profile_id, model_id, source, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, period_start, period_end)
+  - `PricingCache` (model_id, model_name, input_price_per_1k, output_price_per_1k, cache prices, region)
+  - (`InferenceProfile` model already added in Phase 5)
+- [ ] Pricing config: model → price-per-1K-tokens (input/output), loaded from config file
 - [ ] Background polling task (APScheduler or FastAPI background):
-  - Every 5 minutes: call AWS layer `get_usage_metrics` for each active inference profile
+  - On each cycle (frequency defined in [design-decisions.md](design-decisions.md#6-budget-enforcement-timing)): call AWS layer `get_usage_metrics` for each active inference profile
   - Calculate cost (tokens × pricing)
   - Store usage snapshots
   - Check per-key rolling limit → disable key if exceeded
@@ -190,9 +197,10 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 **Goal:** Configurable threshold alerts and admin-level policy controls.
 
 - [ ] Alert configuration model:
-  - `AlertConfig` (cost_centre_id, alert_type, threshold_pct, enabled)
+  - `AlertConfig` (cost_centre_id, alert_type, threshold_pct, channels, channel_config, enabled)
+  - `AlertHistory` (alert_config_id, cost_centre_id, alert_type, message, context JSONB, is_read, triggered_at)
 - [ ] Alert types: CC budget thresholds (50%/80%/100%), per-developer limit thresholds, key expiry reminders
-- [ ] Alert engine: on each polling cycle, evaluate thresholds → create in-app alert records
+- [ ] Alert engine: on each polling cycle, evaluate thresholds → check `alert_history` to avoid duplicates → create new alert records
 - [ ] In-app alert display (notification bell / alerts page) — email/Slack deferred to production
 - [ ] API endpoints:
   - `GET/PUT /api/cost-centres/{id}/alerts` — CCO configures alert thresholds
@@ -214,10 +222,9 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 - [ ] Audit log:
   - All key operations already logged (Phase 5+6) — verify completeness
   - Admin-only audit log viewer: filterable by action, user, resource, date range
-- [ ] API: `GET /api/audit-log` (admin only, with filters)
+- [ ] API: `GET /api/audit-log` (admin only, with filters and pagination)
 - [ ] Frontend: Admin → Audit Log page
-- [ ] Error handling & retry: boto3 calls wrapped with exponential backoff
-- [ ] Graceful degradation: if AWS is unreachable, queue operations for retry
+- [ ] Graceful degradation: if AWS is unreachable, queue operations for retry (retry logic itself already in Phase 4)
 
 **Outputs:** Automated key expiry, complete audit trail, resilient AWS operations.
 
@@ -282,3 +289,24 @@ Phase 11 Integration Testing & Polish
 - SSO-based auto-offboarding
 - Drift reconciliation
 - Unusual usage spike detection
+
+---
+
+## Nice-to-Have Features (Post-PoC)
+
+Features deferred from the PoC but tracked here with links to their source requirements. These can be picked up incrementally after the core PoC is validated.
+
+| # | Feature | Source Requirement | Notes |
+|---|---------|-------------------|-------|
+| N1 | Corporate SSO (OIDC/SAML) | [REQ §3.1.1](requirements.md#311-authentication--login) | Replace hardcoded auth. Enables auto-offboarding. |
+| N2 | Email notifications (AWS SES) | [REQ §3.3.3](requirements.md#333-alert-configuration) | Budget alerts, key approval/rejection, expiry reminders via email. |
+| N3 | Slack notifications (webhooks) | [REQ §3.3.3](requirements.md#333-alert-configuration) | Budget alerts, key approval/rejection to Slack channels. |
+| N4 | CSV export of usage data | [REQ §3.2.4](requirements.md#324-cost--usage-dashboard) | Export cost/usage reports for finance teams. |
+| N5 | Guardrails / content filtering | [REQ §3.4.5](requirements.md#345-guardrails-optional--future) | Per-CC or global content filtering via Bedrock Guardrails. |
+| N6 | SSO-based auto-offboarding | [REQ §4.1](requirements.md#41-security) | When user is deactivated in SSO, auto-disable all keys. |
+| N7 | Drift reconciliation | [REQ §4.3](requirements.md#43-reliability) | Detect and fix mismatches between app DB and actual AWS state. |
+| N8 | Unusual usage spike detection | [REQ §3.3.3](requirements.md#333-alert-configuration) | Anomaly detection on usage patterns. `usage_spike` alert type exists in schema as placeholder. |
+| N9 | WebSocket/SSE real-time updates | [REQ §3.1.3](requirements.md#313-developer-dashboard) | Push approval status, usage updates to frontend without polling. |
+| N10 | Full invocation log parsing | [Design Decision #12](design-decisions.md#12-per-key-usage-data-source) | If PoC uses proportional estimation, upgrade to full log parsing for accurate per-key attribution. |
+| N11 | Pre-calculated "estimated remaining budget" | [Design Decision #6](design-decisions.md#6-budget-enforcement-timing) | Show developers projected budget depletion time on dashboard. |
+| N12 | Adaptive polling frequency | [Design Decision #6](design-decisions.md#6-budget-enforcement-timing) | Tighten polling for CCs near their budget threshold. |

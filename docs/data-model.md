@@ -21,6 +21,8 @@ erDiagram
     cost_centres ||--o{ keys : "contains"
     cost_centres ||--o{ inference_profiles : "has profiles"
     cost_centres ||--o{ alert_configs : "has alerts"
+    cost_centres ||--o{ alert_history : "has alert history"
+    alert_configs ||--o{ alert_history : "triggers"
     keys ||--o{ usage_snapshots : "tracks usage"
     key_requests ||--o| keys : "produces"
     inference_profiles ||--o{ usage_snapshots : "aggregates usage"
@@ -30,6 +32,7 @@ erDiagram
         string username UK
         string display_name
         string email
+        string password_hash
         string[] roles
         boolean is_active
         timestamp created_at
@@ -104,6 +107,7 @@ erDiagram
         uuid key_id FK
         uuid inference_profile_id FK
         string model_id
+        string source
         bigint input_tokens
         bigint output_tokens
         bigint cache_read_tokens
@@ -138,6 +142,17 @@ erDiagram
         boolean is_enabled
         timestamp created_at
         timestamp updated_at
+    }
+
+    alert_history {
+        uuid id PK
+        uuid alert_config_id FK
+        uuid cost_centre_id FK
+        string alert_type
+        string message
+        jsonb context
+        boolean is_read
+        timestamp triggered_at
     }
 
     audit_log {
@@ -338,14 +353,20 @@ AWS Application Inference Profiles created by the platform. One per cost centre 
 
 ### `usage_snapshots`
 
-Periodic token usage and cost data collected by the background scheduler (every 5 minutes). Each row represents one collection interval for one key against one inference profile.
+Periodic token usage and cost data collected by the background scheduler. Two data paths feed this table (see [design-decisions.md](design-decisions.md#12-per-key-usage-data-source)):
+
+1. **CloudWatch metrics** — CC-level totals per inference profile. `key_id` is NULL for these rows.
+2. **Model invocation logs** — per-key breakdown via IAM user identity. `key_id` is populated.
+
+CC-level budget enforcement uses CloudWatch rows (fast, near-real-time). Per-key drill-down uses invocation log rows (slight delay).
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | `id` | `UUID` | PK, default `gen_random_uuid()` | Primary key |
-| `key_id` | `UUID` | FK → `keys.id`, NOT NULL | Key that generated this usage |
+| `key_id` | `UUID` | FK → `keys.id`, NULL | Key that generated this usage. NULL for CC-level CloudWatch snapshots. |
 | `inference_profile_id` | `UUID` | FK → `inference_profiles.id`, NOT NULL | Inference profile used |
 | `model_id` | `VARCHAR(100)` | NOT NULL | Model ID (denormalised for query convenience) |
+| `source` | `VARCHAR(20)` | NOT NULL, default `'cloudwatch'` | Data source: `cloudwatch` or `invocation_log` |
 | `input_tokens` | `BIGINT` | NOT NULL, default `0` | Input tokens consumed in this period |
 | `output_tokens` | `BIGINT` | NOT NULL, default `0` | Output tokens generated in this period |
 | `cache_read_tokens` | `BIGINT` | NOT NULL, default `0` | Cache read tokens in this period |
@@ -362,7 +383,8 @@ Periodic token usage and cost data collected by the background scheduler (every 
 
 **Notes:**
 - Rolling-period budget enforcement queries: `SELECT SUM(cost) FROM usage_snapshots WHERE key_id = ? AND period_start >= NOW() - INTERVAL '? days'`
-- CC-level budget enforcement aggregates across all keys in the cost centre.
+- CC-level budget enforcement uses `source = 'cloudwatch'` rows, aggregating across all inference profiles in the cost centre.
+- Per-key budget enforcement uses `source = 'invocation_log'` rows when available, falling back to equal-split estimation from CloudWatch data.
 - Older snapshots may be aggregated/archived for performance (future optimisation).
 
 ---
@@ -370,6 +392,8 @@ Periodic token usage and cost data collected by the background scheduler (every 
 ### `pricing_cache`
 
 Cached model pricing from AWS Price List API. Refreshed daily by the background scheduler. Hardcoded seed values for PoC.
+
+**Convention:** All prices are stored as USD per 1,000 tokens (not per million). AWS Bedrock typically quotes per-million pricing — divide by 1,000 when populating seed data.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
@@ -408,7 +432,7 @@ Configurable alert rules per cost centre. CCOs define thresholds and notificatio
 |-------|-------------|
 | `cc_budget_threshold` | Cost centre budget usage hit X% |
 | `developer_limit_threshold` | Individual developer exceeded X% of their key limit |
-| `usage_spike` | Abnormal usage pattern detected |
+| `usage_spike` | Abnormal usage pattern detected (production only — placeholder in PoC) |
 | `key_expiry_reminder` | Key approaching expiration |
 | `new_key_request` | New key request submitted for this cost centre |
 
@@ -424,6 +448,36 @@ Configurable alert rules per cost centre. CCOs define thresholds and notificatio
 **Indexes:**
 - `idx_alert_configs_cc` — on `cost_centre_id`
 - `idx_alert_configs_type` — on `alert_type`
+
+**Notes:**
+- `channel_config.slack_webhook_url` is effectively a secret (bearer token for Slack posting). Treat accordingly in production (encrypt or use a secrets manager). Acceptable as plain JSONB for PoC.
+
+---
+
+### `alert_history`
+
+Record of triggered alerts. Prevents re-sending the same alert on every polling cycle and provides an audit trail of notifications.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | `UUID` | PK, default `gen_random_uuid()` | Primary key |
+| `alert_config_id` | `UUID` | FK → `alert_configs.id`, NOT NULL | Alert rule that triggered this |
+| `cost_centre_id` | `UUID` | FK → `cost_centres.id`, NOT NULL | Cost centre (denormalised for query convenience) |
+| `alert_type` | `VARCHAR(50)` | NOT NULL | Alert type (denormalised) |
+| `message` | `TEXT` | NOT NULL | Human-readable alert message |
+| `context` | `JSONB` | NULL | Snapshot of relevant data at trigger time (e.g., `{"current_spend": 42.50, "budget_cap": 50.00, "threshold_pct": 80}`) |
+| `is_read` | `BOOLEAN` | NOT NULL, default `FALSE` | Whether the user has dismissed/read this alert |
+| `triggered_at` | `TIMESTAMPTZ` | NOT NULL, default `NOW()` | When the alert fired |
+
+**Indexes:**
+- `idx_alert_history_cc` — on `cost_centre_id`
+- `idx_alert_history_config` — on `alert_config_id`
+- `idx_alert_history_triggered_at` — on `triggered_at`
+- `idx_alert_history_unread` — on `(cost_centre_id, is_read)` WHERE `is_read = FALSE`
+
+**Notes:**
+- The background scheduler checks: for a given `alert_config_id`, has an alert already been triggered at the current threshold level? If yes, skip. This prevents duplicate notifications.
+- In-app display only for PoC. Email/Slack delivery deferred to production.
 
 ---
 
@@ -510,8 +564,9 @@ Key-value store for platform-wide configuration. Managed by Administrators.
 | One active key per developer per cost centre | Partial unique index on `keys(developer_id, cost_centre_id)` WHERE `status IN ('active', 'stopped')` |
 | CCO auto-approval for own cost centre | Application logic: if developer is CCO for selected CC, set `key_requests.status = 'approved'` and `reviewed_by = developer_id` |
 | Key constraints set at approval time | `key_requests.approved_constraints` JSONB copied to `keys` columns on provisioning |
-| CC budget cap stops all keys | Background scheduler: if `SUM(usage_snapshots.cost)` for CC ≥ `cost_centres.budget_cap`, disable all CC keys |
-| Per-key rolling limit | Background scheduler: if rolling-window spend ≥ `keys.rolling_limit`, set key status to `stopped` |
+| CC budget cap stops all keys | Background scheduler: if `SUM(usage_snapshots.cost) WHERE source = 'cloudwatch'` for CC ≥ `cost_centres.budget_cap`, disable all CC keys |
+| Per-key rolling limit | Background scheduler: if rolling-window spend (from `invocation_log` rows) ≥ `keys.rolling_limit`, set key status to `stopped` |
+| Alert deduplication | `alert_history` tracks fired alerts; scheduler skips if same threshold already triggered |
 | Deactivated user → all keys disabled | Application logic on `users.is_active = FALSE` |
 | Archived CC → all keys disabled, pending requests rejected | Application logic on `cost_centres.status = 'archived'` |
 | Bearer tokens never stored | No token column in `keys`; token returned only via API response |
@@ -520,6 +575,6 @@ Key-value store for platform-wide configuration. Managed by Administrators.
 
 ## Related Documents
 
-- [Requirements](REQUIREMENTS.md) — Functional and non-functional requirements
+- [Requirements](requirements.md) — Functional and non-functional requirements
 - [Design](design.md) — Architecture, containers, and key flows
 - [Design Decisions](design-decisions.md) — Rationale for credential strategy, cost tracking, and model restrictions

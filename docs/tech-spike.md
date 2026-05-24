@@ -75,14 +75,14 @@ aws bedrock delete-inference-profile --inference-profile-identifier <arn>
 
 After running a few requests through the inference profile (spike #1):
 
-- [ ] How quickly do `InputTokenCount` / `OutputTokenCount` metrics appear in CloudWatch? (documented as "near real-time" — verify it's < 5 minutes)
+- [ ] How quickly do `InputTokenCount` / `OutputTokenCount` metrics appear in CloudWatch? (documented as "near real-time" — verify it's < 2 minutes)
 - [ ] Are metrics available with `InferenceProfileId` dimension? (needed for per-CC queries)
-- [ ] Does `Period=300` (5-minute) granularity work for `get_metric_statistics`?
+- [ ] Does `Period=120` (2-minute) granularity work for `get_metric_statistics`?
 - [ ] Can we get metrics broken down by model ID within the same inference profile?
 
 ### Why it matters
 
-Budget enforcement polls every 5 minutes. If CloudWatch metrics have > 5 minute lag, we may need to fall back to parsing invocation logs for budget enforcement (more complex).
+Budget enforcement polls every 2 minutes (see [design-decisions.md](design-decisions.md#6-budget-enforcement-timing)). If CloudWatch metrics have > 2 minute lag, we may need to fall back to parsing invocation logs for budget enforcement (more complex).
 
 ---
 

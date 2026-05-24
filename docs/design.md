@@ -110,9 +110,9 @@ REST endpoints grouped by domain. Handles authentication (hardcoded users for Po
 #### 3.2.2 Service Layer
 Business logic decoupled from HTTP concerns. Orchestrates the key lifecycle:
 
-- **Key Provisioning Service** — Handles the request → approval → AWS provisioning flow. Creates IAM user, attaches model restriction policy (including `bedrock:CallWithBearerToken` + inference profile access), creates/assigns inference profiles for the cost centre, generates Bedrock API Key via `CreateServiceSpecificCredential`, returns bearer token + `modelOverrides` setup instructions.
+- **Key Provisioning Service** — Handles the request → approval → AWS provisioning flow. Creates IAM user, attaches model restriction policy (including `bedrock:CallWithBearerToken` + inference profile access), creates/assigns inference profiles for the cost centre (creates on-demand if a new model is approved for a CC that doesn't yet have a profile for it), generates Bedrock API Key via `CreateServiceSpecificCredential`, returns bearer token + `modelOverrides` setup instructions.
 - **Key Lifecycle Service** — Revocation (`UpdateServiceSpecificCredential` → Inactive), regeneration (`ResetServiceSpecificCredential`), expiry handling, and cleanup (`DeleteServiceSpecificCredential` + `DeleteUser`).
-- **Cost Tracking Service** — Polls CloudWatch metrics per inference profile, calculates costs using cached pricing, updates usage snapshots in the DB. Per-key drill-down comes from invocation logs (IAM user identity).
+- **Cost Tracking Service** — Two data paths (see [design-decisions.md](design-decisions.md#12-per-key-usage-data-source)): (1) polls CloudWatch metrics per inference profile for CC-level budget enforcement, (2) parses model invocation logs for per-key attribution. Calculates costs using cached pricing, updates usage snapshots in the DB.
 - **Budget Enforcement Service** — Compares accumulated cost against per-key rolling-period/lifetime limits and CC-level budget caps. Disables individual keys or all keys in a CC as needed.
 - **Pricing Service** — Provides model pricing rates. Hardcoded for PoC; production fetches from AWS Price List API (`AmazonBedrockFoundationModels`), caches in DB, refreshes daily.
 
@@ -123,13 +123,14 @@ Thin wrapper around `boto3` calls. Abstracted behind an interface so it can be s
 | Service | Purpose |
 |---------|---------|
 | **IAM** | Create/delete users, attach/detach policies (including `bedrock:CallWithBearerToken`, `bedrock:GetInferenceProfile`), create/reset/deactivate service-specific credentials |
-| **Bedrock** | Create inference profiles (one per CC per model), model access configuration |
+| **Bedrock** | Create/delete inference profiles (one per CC per model), model access configuration |
 | **CloudWatch** | Poll `InputTokenCount`, `OutputTokenCount`, `CacheReadInputTokens`, `CacheWriteInputTokens` per inference profile |
+| **Bedrock Logs** | Model invocation logs (S3/CloudWatch Logs) for per-key attribution via IAM user identity |
 | **Pricing** | Fetch current Bedrock model pricing via Price List Query API (hardcoded for PoC, API for production) |
 | **CloudTrail** | Audit trail (read-only — AWS logs automatically per IAM user) |
 
 #### 3.2.4 Background Scheduler
-A periodic task (every 5 minutes) that:
+A periodic task (polling frequency defined in [design-decisions.md](design-decisions.md#6-budget-enforcement-timing)) that:
 1. Queries CloudWatch for token metrics per active inference profile
 2. Calculates cost using cached pricing rates
 3. Updates usage snapshots in the database
@@ -149,8 +150,10 @@ Stores all application state. No secrets — bearer tokens are never persisted (
 | `cost_centres` | Budget unit with owner assignments, status, budget cap |
 | `keys` | Bedrock API Key metadata — IAM username, credential ID, status, expiry, model restrictions. No bearer token stored. |
 | `key_requests` | Approval workflow — request, approval/rejection, constraints set by approver |
-| `usage_snapshots` | Periodic cost/token data per inference profile, accumulated over rolling periods |
+| `usage_snapshots` | Periodic cost/token data — CC-level from CloudWatch, per-key from invocation logs |
 | `pricing_cache` | Current model pricing from AWS Price List API (refreshed daily) |
+| `alert_configs` | Configurable alert thresholds per cost centre |
+| `alert_history` | Record of triggered alerts (prevents duplicate notifications) |
 | `audit_log` | Record of all state-changing actions (who did what, when) |
 
 ---
@@ -193,7 +196,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant AWS as AWS (IAM)
 
-    loop Every 5 minutes
+    loop Every polling cycle (see design-decisions.md §6)
         Sched->>CW: GetMetricStatistics per inference profile
         CW-->>Sched: InputTokenCount, OutputTokenCount, Cache tokens
         Sched->>Sched: Calculate cost (tokens × cached pricing)
@@ -259,16 +262,50 @@ Mock AWS layer for local dev; real AWS for integration tests and PoC demo.
 
 - **No secrets in the database** — bearer tokens are displayed once, never stored
 - **Bedrock-scoped credentials** — API keys can only access Bedrock, not S3/EC2/etc
-- **IAM policy enforcement** — model restrictions enforced at AWS layer, not app layer
+- **IAM policy enforcement** — model restrictions enforced at AWS layer, not app layer; exact model ARNs, not wildcards (see [design-decisions.md](design-decisions.md#13-iam-policy-model-specificity))
 - **Audit trail** — all actions logged in app DB; all Bedrock calls logged in CloudTrail per IAM user
-- **PoC auth** — hardcoded users (production: corporate SSO via OIDC/SAML)
+- **PoC auth** — hardcoded users with bcrypt-hashed passwords (production: corporate SSO via OIDC/SAML)
 - **Key expiration** — built-in via `credential-age-days`; enforceable via SCP
+- **JWT tokens** — short-lived (PoC: 24h expiry), stored in httpOnly cookies, include user ID and roles. No refresh tokens for PoC. On user deactivation, existing JWTs continue to work until expiry but all API calls check `is_active`.
+- **Rate limiting** — login endpoint rate-limited (e.g., 5 attempts per minute per IP) to prevent brute-force. General API rate limiting deferred to production.
+- **Slack webhook URLs** — stored as plain JSONB in `alert_configs` for PoC. Production should encrypt or use a secrets manager (see [data-model.md](data-model.md) alert_configs notes).
 
 ---
 
-## 7. Related Documents
+## 7. API Conventions
 
-- [Requirements](REQUIREMENTS.md) — Full functional and non-functional requirements
+- **Pagination** — all list endpoints support `?page=1&page_size=50` query parameters (default: page 1, 50 items). Response includes `total`, `page`, `page_size`, and `items[]`.
+- **Error format** — JSON: `{"detail": "message", "code": "ERROR_CODE"}`. HTTP status codes follow REST conventions.
+- **Real-time updates** — PoC uses polling from the frontend (e.g., React Query refetch intervals). WebSocket/SSE deferred to production.
+
+---
+
+## 8. Key Algorithms
+
+### 8.1 "Tokens Available Again" Calculation
+
+When a key is stopped due to a rolling-period budget limit, the developer dashboard shows when tokens will become available. The algorithm:
+
+1. Query `usage_snapshots` for the stopped key within the rolling window (`NOW() - rolling_period_days`)
+2. Find the oldest snapshot(s) in the window that, if removed, would bring the rolling total below `rolling_limit`
+3. The "available again" time = oldest such snapshot's `period_end` + `rolling_period_days`
+4. Display as: "Budget available again in ~X hours" or a specific datetime
+
+### 8.2 Inference Profile Lifecycle
+
+Inference profiles are created on-demand, not eagerly:
+
+1. When a key is approved for a CC + model combination, check if an active inference profile exists for that CC + model
+2. If not, create one via `CreateInferenceProfile` and store in `inference_profiles`
+3. Profiles are shared across all keys in the same CC for the same model
+4. On CC archival, profiles are retained (not deleted) — they may contain CloudWatch metrics still needed for reporting
+5. On CC unarchival, existing profiles are reused
+
+---
+
+## 9. Related Documents
+
+- [Requirements](requirements.md) — Full functional and non-functional requirements
 - [Data Model](data-model.md) — Database schema, entity definitions, and relationships
 - [Design Decisions](design-decisions.md) — All design decisions with rationale
 - [Tech Spike](tech-spike.md) — Hands-on validation items before PoC build
