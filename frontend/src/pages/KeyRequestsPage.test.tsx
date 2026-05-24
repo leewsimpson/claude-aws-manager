@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Route, Routes } from 'react-router-dom'
-import { screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { KeyRequestsPage } from './KeyRequestsPage'
+import { TokenReveal } from '../components/TokenReveal'
 import { renderWithProviders } from '../test/utils'
 import {
   ADMIN_TOKEN,
@@ -10,6 +11,8 @@ import {
   TEST_TOKEN,
   seedPendingKeyRequest,
 } from '../mocks/handlers'
+import { server } from '../mocks/server'
+import type { ProvisionedKey } from '../features/keyRequests/types'
 
 function renderPage(token: string) {
   localStorage.setItem('cam.token', token)
@@ -40,10 +43,13 @@ describe('KeyRequestsPage — developer', () => {
   it('does NOT show the pending requests reviewer section for a developer', async () => {
     renderPage(TEST_TOKEN)
 
-    // Wait for page to render
+    // Wait for page to fully render
     await screen.findByRole('heading', { name: /request a key/i })
     // Reviewer section heading should not be present
     expect(screen.queryByRole('heading', { name: /pending requests/i })).not.toBeInTheDocument()
+    // Approve/Reject action buttons should not be present
+    expect(screen.queryByRole('button', { name: /^approve$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^reject$/i })).not.toBeInTheDocument()
   })
 
   it('developer can submit a request and it appears in My requests', async () => {
@@ -132,7 +138,7 @@ describe('KeyRequestsPage — reviewer (admin)', () => {
     expect(screen.getByRole('button', { name: /^reject$/i })).toBeInTheDocument()
   })
 
-  it('admin can approve a request and sees TokenReveal', async () => {
+  it('admin can approve a request and sees TokenReveal with env-var text and bearer token', async () => {
     const user = userEvent.setup()
     seedPendingKeyRequest()
     renderPage(ADMIN_TOKEN)
@@ -150,12 +156,29 @@ describe('KeyRequestsPage — reviewer (admin)', () => {
     // TokenReveal should appear
     expect(await screen.findByText(/store this token now/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /copy bearer token/i })).toBeInTheDocument()
+
+    // The env-var line should be shown (bearer token embedded in the env var text)
+    expect(screen.getByText(/AWS_BEARER_TOKEN_BEDROCK=/i)).toBeInTheDocument()
+
+    // The copy env-var button should be present
+    expect(screen.getByRole('button', { name: /copy aws_bearer_token_bedrock/i })).toBeInTheDocument()
   })
 
-  it('admin can reject a request with a reason', async () => {
+  it('admin can reject a request and the POST body carries rejection_reason', async () => {
     const user = userEvent.setup()
     seedPendingKeyRequest()
     renderPage(ADMIN_TOKEN)
+
+    // Capture the reject request body via MSW lifecycle events.
+    // server.events picks on/removeListener/removeAllListeners from the emitter.
+    let capturedBody: Record<string, unknown> | null = null
+    const listener = async ({ request }: { request: Request }) => {
+      if (request.method === 'POST' && request.url.includes('/reject')) {
+        // Clone so MSW can still read the body for the handler
+        capturedBody = (await request.clone().json()) as Record<string, unknown>
+      }
+    }
+    server.events.on('request:start', listener)
 
     await screen.findByText('Developer One (dev1)')
 
@@ -174,6 +197,14 @@ describe('KeyRequestsPage — reviewer (admin)', () => {
     await waitFor(() =>
       expect(screen.queryByRole('heading', { name: /reject request/i })).not.toBeInTheDocument(),
     )
+
+    // The POST body must have carried the rejection_reason
+    await waitFor(() => {
+      expect(capturedBody).not.toBeNull()
+      expect(capturedBody?.rejection_reason).toBe('Not approved at this time.')
+    })
+
+    server.events.removeListener('request:start', listener)
   })
 })
 
@@ -192,5 +223,48 @@ describe('KeyRequestsPage — reviewer (cco)', () => {
 
     await screen.findByText('Developer One (dev1)')
     expect(screen.getByRole('button', { name: /^approve$/i })).toBeInTheDocument()
+  })
+})
+
+describe('TokenReveal — copy button', () => {
+  it('copy bearer token button writes to clipboard and shows Copied! feedback', async () => {
+    // userEvent.setup() installs its own clipboard implementation. Spy on it after
+    // setup so our spy reference matches what the component actually invokes.
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText')
+
+    const mockKey: ProvisionedKey = {
+      id: 'key-test',
+      cost_centre_id: 'cc-1',
+      cost_centre_code: 'ENG',
+      iam_username: 'claude-dev1-eng',
+      status: 'active',
+      allowed_models: ['anthropic.claude-sonnet-4-6'],
+      rolling_limit: null,
+      rolling_period_days: null,
+      lifetime_budget: null,
+      expires_at: null,
+      bearer_token: 'mock-bearer-token-abc123',
+      inference_profiles: [],
+    }
+
+    const onDismiss = vi.fn()
+    render(<TokenReveal provisionedKey={mockKey} onDismiss={onDismiss} />)
+
+    // TokenReveal should be visible
+    expect(screen.getByText(/store this token now/i)).toBeInTheDocument()
+
+    // Click the copy bearer token button
+    const copyBtn = screen.getByRole('button', { name: /copy bearer token/i })
+    await user.click(copyBtn)
+
+    // Button shows "Copied!" feedback (proves the copy path succeeded)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /copy bearer token/i })).toHaveTextContent('Copied!')
+    })
+    // Verify writeText was called with the exact bearer token
+    expect(writeTextSpy).toHaveBeenCalledWith('mock-bearer-token-abc123')
+
+    writeTextSpy.mockRestore()
   })
 })

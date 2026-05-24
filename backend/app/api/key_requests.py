@@ -11,16 +11,17 @@ Roles:
 
 from __future__ import annotations
 
-import ipaddress
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.deps import get_current_user
+from app.core.request import client_ip as _client_ip
 from app.db.session import get_db
 from app.models.cost_centre import CostCentre
 from app.models.cost_centre_owner import CostCentreOwner
@@ -38,7 +39,11 @@ from app.schemas.key_request import (
     ProvisionedKeyOut,
 )
 from app.services.aws import AwsService, AwsServiceError, DuplicateKeyError, get_aws_service
-from app.services.provisioning import provision_for_request
+from app.services.provisioning import (
+    ProvisionOutcome,
+    compensate_aws,
+    provision_for_request,
+)
 
 router = APIRouter(prefix="/key-requests", tags=["key-requests"])
 
@@ -46,17 +51,6 @@ router = APIRouter(prefix="/key-requests", tags=["key-requests"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _client_ip(request: Request) -> str | None:
-    """Return the client IP if it parses as a valid address (INET column)."""
-    if request.client is None:
-        return None
-    try:
-        ipaddress.ip_address(request.client.host)
-    except ValueError:
-        return None
-    return request.client.host
 
 
 def _is_cco_of(db: Session, user_id: uuid.UUID, cc_id: uuid.UUID) -> bool:
@@ -75,6 +69,13 @@ def _can_review(db: Session, actor: User, cc_id: uuid.UUID) -> bool:
     if "admin" in (actor.roles or []):
         return True
     return _is_cco_of(db, actor.id, cc_id)
+
+
+def _can_see(db: Session, actor: User, kr: KeyRequest) -> bool:
+    """Return True if actor may view the request (admin, owner-CCO, or its developer)."""
+    if kr.developer_id == actor.id:
+        return True
+    return _can_review(db, actor, kr.cost_centre_id)
 
 
 def _resolve_constraints(
@@ -129,6 +130,15 @@ def _resolve_constraints(
             resolved_lifetime_budget = overrides.lifetime_budget
         if overrides.expiry_days is not None:
             resolved_expiry_days = overrides.expiry_days
+
+    if not resolved_models:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "No models available to grant — set a global allowed-models list "
+                "or supply allowed_models on approval"
+            ),
+        )
 
     return {
         "allowed_models": resolved_models,
@@ -194,6 +204,63 @@ def _get_global_allowed_models(db: Session) -> list[str]:
     if isinstance(v, list):
         return [str(m) for m in v]
     return []
+
+
+def _provision_and_commit(
+    db: Session,
+    aws: AwsService,
+    *,
+    kr: KeyRequest,
+    constraints: dict,
+    actor: User,
+    ip_address: str | None,
+) -> ProvisionOutcome:
+    """Provision a key for an already-approved request and commit the transaction.
+
+    Maps AWS errors to HTTP and keeps AWS/DB consistent: provisioning failures
+    self-compensate inside ``provision_for_request``; a commit-time
+    ``IntegrityError`` (one-active-key race vs. the partial unique index) rolls
+    back and compensates the AWS side-effects before surfacing a 409.
+    """
+    # provision_for_request self-compensates its AWS side-effects on failure; the
+    # DB transaction is rolled back by get_db when the HTTPException propagates.
+    try:
+        outcome = provision_for_request(
+            db,
+            aws,
+            key_request=kr,
+            constraints=constraints,
+            actor=actor,
+            ip_address=ip_address,
+        )
+    except DuplicateKeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except AwsServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"AWS error: {exc}"
+        ) from exc
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # One-active-key race vs. the partial unique index: the AWS key/profiles were
+        # created but the DB won't commit, so compensate before get_db rolls back.
+        compensate_aws(
+            aws,
+            created_profile_arns=outcome.created_profile_arns,
+            credential_id=outcome.credential_id,
+            iam_username=outcome.iam_username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Developer already has an active key for this cost centre",
+        ) from exc
+
+    db.refresh(kr)
+    db.refresh(outcome.key)
+    return outcome
 
 
 # ---------------------------------------------------------------------------
@@ -297,33 +364,19 @@ def create_key_request(
             ip_address=_client_ip(request),
         )
 
-        try:
-            key, bearer_token, profile_refs = provision_for_request(
-                db,
-                aws,
-                key_request=kr,
-                constraints=constraints,
-                actor=actor,
-                ip_address=_client_ip(request),
-            )
-        except DuplicateKeyError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
-            ) from exc
-        except AwsServiceError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"AWS error: {exc}",
-            ) from exc
-
-        db.commit()
-        db.refresh(kr)
-        db.refresh(key)
-
+        outcome = _provision_and_commit(
+            db,
+            aws,
+            kr=kr,
+            constraints=constraints,
+            actor=actor,
+            ip_address=_client_ip(request),
+        )
         return KeyRequestResult(
             request=_serialise_request(db, kr),
-            key=_serialise_key(db, key, bearer_token, profile_refs),
+            key=_serialise_key(
+                db, outcome.key, outcome.bearer_token, outcome.profile_refs
+            ),
         )
 
     db.commit()
@@ -394,12 +447,10 @@ def get_key_request(
             status_code=status.HTTP_404_NOT_FOUND, detail="Key request not found"
         )
 
-    is_admin = "admin" in (actor.roles or [])
-    if not is_admin:
-        if kr.developer_id != actor.id and not _is_cco_of(db, actor.id, kr.cost_centre_id):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Key request not found"
-            )
+    if not _can_see(db, actor, kr):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Key request not found"
+        )
 
     return _serialise_request(db, kr)
 
@@ -424,6 +475,10 @@ def approve_key_request(
             status_code=status.HTTP_404_NOT_FOUND, detail="Key request not found"
         )
 
+    if not _can_see(db, actor, kr):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Key request not found"
+        )
     if not _can_review(db, actor, kr.cost_centre_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
@@ -469,33 +524,20 @@ def approve_key_request(
         ip_address=_client_ip(request),
     )
 
-    try:
-        key, bearer_token, profile_refs = provision_for_request(
-            db,
-            aws,
-            key_request=kr,
-            constraints=constraints,
-            actor=actor,
-            ip_address=_client_ip(request),
-        )
-    except DuplicateKeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-    except AwsServiceError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"AWS error: {exc}",
-        ) from exc
-
-    db.commit()
-    db.refresh(kr)
-    db.refresh(key)
+    outcome = _provision_and_commit(
+        db,
+        aws,
+        kr=kr,
+        constraints=constraints,
+        actor=actor,
+        ip_address=_client_ip(request),
+    )
 
     return KeyRequestResult(
         request=_serialise_request(db, kr),
-        key=_serialise_key(db, key, bearer_token, profile_refs),
+        key=_serialise_key(
+            db, outcome.key, outcome.bearer_token, outcome.profile_refs
+        ),
     )
 
 
@@ -514,6 +556,10 @@ def reject_key_request(
             status_code=status.HTTP_404_NOT_FOUND, detail="Key request not found"
         )
 
+    if not _can_see(db, actor, kr):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Key request not found"
+        )
     if not _can_review(db, actor, kr.cost_centre_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"

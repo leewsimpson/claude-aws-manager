@@ -5,7 +5,6 @@ listing/reading is open to any authenticated user (with archived cost centres
 hidden from non-admins). First feature to write the ``audit_log``.
 """
 
-import ipaddress
 import uuid
 from datetime import datetime, timezone
 
@@ -15,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.deps import get_current_user, require_roles
+from app.core.request import client_ip as _client_ip
 from app.db.session import get_db
 from app.models.cost_centre import CostCentre as CostCentreModel
 from app.models.cost_centre_owner import CostCentreOwner
@@ -31,17 +31,6 @@ from app.schemas.cost_centre import (
 from app.services.aws import AwsService, KeyNotFoundError, get_aws_service
 
 router = APIRouter(prefix="/cost-centres", tags=["cost-centres"])
-
-
-def _client_ip(request: Request) -> str | None:
-    """Return the client IP if it parses as a valid address (INET column)."""
-    if request.client is None:
-        return None
-    try:
-        ipaddress.ip_address(request.client.host)
-    except ValueError:
-        return None
-    return request.client.host
 
 
 def _serialise(db: Session, cc: CostCentreModel) -> CostCentre:

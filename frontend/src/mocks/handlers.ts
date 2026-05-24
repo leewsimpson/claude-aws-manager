@@ -14,7 +14,7 @@ export const ADMIN_TOKEN = 'admin-token-456'
 export const CCO_TOKEN = 'cco-token-789'
 
 export const TEST_USER = {
-  id: 1,
+  id: 'u-dev1',
   username: 'dev1',
   display_name: 'Developer One',
   email: 'dev1@example.com',
@@ -22,7 +22,7 @@ export const TEST_USER = {
 }
 
 export const ADMIN_USER = {
-  id: 2,
+  id: 'u-admin',
   username: 'admin',
   display_name: 'Administrator',
   email: 'admin@example.com',
@@ -131,9 +131,9 @@ function isAuthed(request: Request): boolean {
 
 function getRequestingUserId(request: Request): string {
   const auth = request.headers.get('Authorization')
-  if (auth === `Bearer ${ADMIN_TOKEN}`) return String(ADMIN_USER.id)
-  if (auth === `Bearer ${CCO_TOKEN}`) return String(CCO_USER.id)
-  return String(TEST_USER.id)
+  if (auth === `Bearer ${ADMIN_TOKEN}`) return ADMIN_USER.id
+  if (auth === `Bearer ${CCO_TOKEN}`) return CCO_USER.id
+  return TEST_USER.id
 }
 
 // ---- Key request store ----
@@ -159,7 +159,7 @@ export function seedPendingKeyRequest(overrides?: Partial<KeyRequest>): KeyReque
   const now = '2026-05-24T10:00:00Z'
   const req: KeyRequest = {
     id,
-    developer_id: String(TEST_USER.id),
+    developer_id: TEST_USER.id,
     developer_username: TEST_USER.username,
     developer_display_name: TEST_USER.display_name,
     cost_centre_id: cc.id,
@@ -179,7 +179,11 @@ export function seedPendingKeyRequest(overrides?: Partial<KeyRequest>): KeyReque
   return req
 }
 
-function makeProvisionedKey(request: KeyRequest, allowedModels: string[]): ProvisionedKey {
+function makeProvisionedKey(
+  request: KeyRequest,
+  allowedModels: string[],
+  expiryDays?: number,
+): ProvisionedKey {
   return {
     id: `key-${nextKeyRequestId}`,
     cost_centre_id: request.cost_centre_id,
@@ -190,7 +194,9 @@ function makeProvisionedKey(request: KeyRequest, allowedModels: string[]): Provi
     rolling_limit: null,
     rolling_period_days: null,
     lifetime_budget: null,
-    expires_at: null,
+    expires_at: expiryDays
+      ? new Date(Date.now() + expiryDays * 86400000).toISOString()
+      : null,
     bearer_token: `mock-bearer-token-${request.id}`,
     inference_profiles: allowedModels.map((m) => ({
       model_id: m,
@@ -384,7 +390,7 @@ export const handlers = [
 
     let visible = isReviewer
       ? keyRequests
-      : keyRequests.filter((r) => String(r.developer_id) === userId)
+      : keyRequests.filter((r) => r.developer_id === userId)
 
     if (statusFilter) {
       visible = visible.filter((r) => r.status === statusFilter)
@@ -415,7 +421,7 @@ export const handlers = [
     // Conflict: already an active/pending request for this developer + cc
     const existing = keyRequests.find(
       (r) =>
-        String(r.developer_id) === userId &&
+        r.developer_id === userId &&
         r.cost_centre_id === body.cost_centre_id &&
         (r.status === 'pending' || r.status === 'approved'),
     )
@@ -429,7 +435,7 @@ export const handlers = [
     const id = `kr-${nextKeyRequestId++}`
     const now = new Date().toISOString()
     // CCO auto-approve own requests
-    const autoApprove = isCcoUser && cc.owners.some((o) => String(o.user_id) === userId)
+    const autoApprove = isCcoUser && cc.owners.some((o) => o.user_id === userId)
     const newRequest: KeyRequest = {
       id,
       developer_id: userId,
@@ -486,7 +492,7 @@ export const handlers = [
     }
     req.updated_at = now
 
-    const key = makeProvisionedKey(req, allowedModels)
+    const key = makeProvisionedKey(req, allowedModels, body.expiry_days)
     const result: KeyRequestResult = { request: req, key }
     return HttpResponse.json(result)
   }),

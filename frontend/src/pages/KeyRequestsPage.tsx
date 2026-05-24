@@ -164,8 +164,12 @@ function RequestKeyForm() {
       })
       setCostCentreId('')
       setJustification('')
-      if (result.key) {
+      // Only show TokenReveal when the request was auto-approved and a key was
+      // returned. A pending result with key===null is the normal path.
+      if (result.request.status === 'approved' && result.key) {
         setProvisionedKey(result.key)
+      } else if (result.request.status === 'approved' && !result.key) {
+        setError('Approved, but no key token was returned — contact your administrator.')
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -342,10 +346,12 @@ function ApprovePanel({
           ...(expiryDays.trim() && { expiry_days: Number(expiryDays) }),
         },
       })
+      // Approve is contractually required to return a key. If it doesn't,
+      // surface an error rather than silently closing the panel.
       if (result.key) {
         onProvisioned(result.key)
       } else {
-        onDone()
+        setError('Approved, but no key token was returned — contact your administrator.')
       }
     } catch {
       setError('Unable to approve request. Please try again.')
@@ -358,15 +364,12 @@ function ApprovePanel({
         Approve request — {request.cost_centre_code}
       </h3>
 
-      <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-        <legend style={{ fontWeight: 600, marginBottom: '0.4rem', fontSize: '0.9rem' }}>
+      <fieldset className="approve-panel__fieldset">
+        <legend className="approve-panel__legend">
           Allowed models
         </legend>
         {DEFAULT_MODEL_OPTIONS.map((model) => (
-          <label
-            key={model}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem', fontSize: '0.9rem' }}
-          >
+          <label key={model} className="approve-panel__model-row">
             <input
               type="checkbox"
               checked={selectedModels.has(model)}

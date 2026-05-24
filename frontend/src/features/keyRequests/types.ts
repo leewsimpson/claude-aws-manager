@@ -1,5 +1,7 @@
 // Frozen API contract types for the key request & approval flow (Phase 5).
 
+export type KeyRequestStatus = 'pending' | 'approved' | 'rejected'
+
 export interface ApprovedConstraints {
   allowed_models: string[]
   rolling_limit: number | null
@@ -16,7 +18,7 @@ export interface KeyRequest {
   cost_centre_id: string
   cost_centre_code: string
   cost_centre_name: string
-  status: 'pending' | 'approved' | 'rejected'
+  status: KeyRequestStatus
   justification: string | null
   rejection_reason: string | null
   reviewed_by: string | null

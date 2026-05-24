@@ -333,6 +333,28 @@
   color: #b91c1c;
 }
 
+/* ---- Approve panel model checkboxes ---- */
+
+.approve-panel__fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.approve-panel__legend {
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.approve-panel__model-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.9rem;
+}
+
 /* ---- TokenReveal panel ---- */
 
 .token-reveal {
@@ -349,6 +371,20 @@
 .token-reveal__warning {
   color: #92400e;
   font-size: 0.95rem;
+}
+
+.token-reveal__warning--prominent {
+  background-color: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  color: #991b1b;
+}
+
+.token-reveal__warning-detail {
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+  font-weight: 400;
 }
 
 .token-reveal__field {
@@ -430,6 +466,11 @@
   }
   .token-reveal__warning {
     color: #fbbf24;
+  }
+  .token-reveal__warning--prominent {
+    background-color: #3b1515;
+    border-color: #7f1d1d;
+    color: #fca5a5;
   }
   .token-reveal__code,
   .token-reveal__pre {

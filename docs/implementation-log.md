@@ -446,7 +446,30 @@ frontend/src/{App.tsx,components/AppLayout.tsx,App.css,mocks/handlers.ts,test/se
 
 **Carry-forward for Phase 6**
 - Phase 6 (Key Management & Developer Dashboard) builds `GET /api/keys` (scoped), `revoke`, `regenerate`, `PATCH constraints`. **The developer-obtains-own-token recovery path lands here** via `regenerate` (`aws.reset_key`) — Phase 5 only surfaces the token to whoever performs the provisioning action.
-- Reuse `provision_for_request`'s patterns; reuse `record_audit` + `_client_ip` (now duplicated in `cost_centres.py` and `key_requests.py` — consider factoring `_client_ip` into a shared `app/core` helper in P6).
+- Reuse `provision_for_request`'s patterns and the shared `app/core/request.py::client_ip` helper + `record_audit`.
 - `key.stopped`/`key.restarted` audit actions and `lifetime_spend` updates are Phase 7 (budget enforcement) — `keys.lifetime_spend` currently seeds at 0 and nothing updates it yet.
 - The archive cascade now revokes keys but there's no UI to *see* revoked keys until the Phase 6 dashboard — verify the cascade visually once `GET /api/keys` exists.
 - `usage_snapshots`/`pricing_cache` tables still deferred to Phase 7; `inference_profiles` now exists and is populated on approval.
+
+### Post-review hardening (full review before Phase 6)
+
+A full backend + frontend review was run before starting Phase 6 and every finding was fixed (no blockers were found — the review confirmed the architecture, RBAC, and the token-never-stored invariant were sound). Changes:
+
+**Backend** (now **93 backend tests**, 0 warnings):
+- **AWS/DB consistency on failure** (the main gap): `provision_for_request` previously mutated the AWS layer (profiles, key) *before* the DB commit with no compensation — a mid-provision or commit-time failure left orphaned AWS state and could make an approval un-retryable (`DuplicateProfileError`). Now tracked + best-effort undone via `compensate_aws(...)` (delete created profiles, revoke key) on any failure; introduced `ProvisionOutcome`. New test drives a failing mock and asserts 502 + compensation (mock profile index empties).
+- **Commit-time one-active-key race**: `IntegrityError` at commit (vs. the partial unique index) now maps to 409 (with AWS compensation), not a 500.
+- **`get_db` rolls back on exception** (was relying on `close()`); explicit and clearer.
+- **403 vs 404 consistency**: added `_can_see` — approve/reject now return **404** when the actor can't see the request (existence hidden, matching GET) and **403** only when they can see it but aren't a reviewer (e.g. the request's own developer). Two RBAC tests updated + an own-developer-403 test and an other-developer-404 test added.
+- **Empty-allowed-models guard** → 400.
+- **Factored `_client_ip`** out of both routers into `app/core/request.py::client_ip` (closes the duplication carry-forward early).
+- Added a `?status=` filter test (endpoint existed, was untested).
+
+**Frontend** (now **24 Vitest tests**, build clean):
+- **Token-loss guard (HIGH)**: `TokenReveal` registers a `beforeunload` handler while shown + a prominent "navigate away and this token is gone — you'd need to regenerate" warning. (In-app router-blocker noted as a TODO pending a data-router migration.)
+- **Silent-loss-on-null-key (MED)**: approve/auto-approve now treat a missing `key` as an error instead of silently closing the panel; the developer create form only shows `TokenReveal` when `status==='approved' && key`.
+- **Mock user IDs standardised to strings** (removed the latent number/string mismatch).
+- **Type tightening**: `KeyRequestStatus` union for `status`; mock `makeProvisionedKey` now derives `expires_at` from `expiry_days`.
+- **TokenReveal polish**: clipboard write wrapped in try/catch with an error state; second copy button for the `AWS_BEARER_TOKEN_BEDROCK=` line; inline styles → CSS classes.
+- Stronger tests: reject asserts the POST body carries `rejection_reason`; new tests for token/env-var rendering, developer-not-seeing-reviewer-controls, and clipboard copy (+ standalone `TokenReveal.test.tsx`).
+
+**Still open / accepted:** in-app (SPA) navigation away from a shown token is mitigated by the warning + `beforeunload` but not hard-blocked (needs a React Router data router); the AWS-compensation is best-effort by design (a residual orphan beats masking the original error) and will be reconciled against real AWS in Phase 11.

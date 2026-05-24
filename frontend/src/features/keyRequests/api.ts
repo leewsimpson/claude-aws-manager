@@ -15,12 +15,13 @@ import type {
   CreateKeyRequestInput,
   KeyRequest,
   KeyRequestResult,
+  KeyRequestStatus,
   RejectKeyRequestInput,
 } from './types'
 
 const KEY_REQUESTS_KEY = ['key-requests'] as const
 
-export function useKeyRequests(status?: string) {
+export function useKeyRequests(status?: KeyRequestStatus) {
   const { token } = useAuth()
   return useQuery({
     queryKey: [...KEY_REQUESTS_KEY, status ?? 'all'] as const,

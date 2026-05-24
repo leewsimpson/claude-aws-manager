@@ -14,7 +14,7 @@ from app.models.inference_profile import InferenceProfile
 from app.models.key import Key
 from app.models.key_request import KeyRequest
 from app.models.user import User
-from app.services.aws import MockAwsService, get_aws_service
+from app.services.aws import AwsServiceError, MockAwsService, get_aws_service
 from app.main import app
 
 
@@ -432,6 +432,8 @@ def test_non_pending_approve_409(client: TestClient, seeded: Session) -> None:
 def test_cco_of_different_cc_cannot_approve(
     client: TestClient, seeded: Session
 ) -> None:
+    """A CCO who can't see the request (owns a different CC) gets 404, not 403,
+    so the endpoint doesn't disclose the request's existence."""
     admin = _token(client, "admin")
     cc1 = _create_cc(client, admin, code="CC-RB1")
     cc2 = _create_cc(client, admin, code="CC-RB2")
@@ -454,10 +456,13 @@ def test_cco_of_different_cc_cannot_approve(
         json={},
         headers=_auth(cco),
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
-def test_developer_cannot_approve(client: TestClient, seeded: Session) -> None:
+def test_other_developer_cannot_see_or_approve(
+    client: TestClient, seeded: Session
+) -> None:
+    """A different developer can't see another's request → 404 (existence hidden)."""
     admin = _token(client, "admin")
     cc = _create_cc(client, admin, code="CC-DA")
     dev1 = _token(client, "dev1")
@@ -474,6 +479,29 @@ def test_developer_cannot_approve(client: TestClient, seeded: Session) -> None:
         f"/api/key-requests/{request_id}/approve",
         json={},
         headers=_auth(dev2),
+    )
+    assert resp.status_code == 404
+
+
+def test_own_developer_cannot_approve_own_request(
+    client: TestClient, seeded: Session
+) -> None:
+    """The requesting developer can SEE their request but isn't a reviewer → 403."""
+    admin = _token(client, "admin")
+    cc = _create_cc(client, admin, code="CC-OWN")
+    dev = _token(client, "dev1")
+
+    req_resp = client.post(
+        "/api/key-requests",
+        json={"cost_centre_id": cc["id"]},
+        headers=_auth(dev),
+    )
+    request_id = req_resp.json()["request"]["id"]
+
+    resp = client.post(
+        f"/api/key-requests/{request_id}/approve",
+        json={},
+        headers=_auth(dev),
     )
     assert resp.status_code == 403
 
@@ -720,3 +748,90 @@ def test_list_ordered_by_created_at_desc(
     # Verify created_at descending
     created_ats = [i["created_at"] for i in items]
     assert created_ats == sorted(created_ats, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# status filter
+# ---------------------------------------------------------------------------
+
+
+def test_list_status_filter(client: TestClient, seeded: Session) -> None:
+    admin = _token(client, "admin")
+    cc1 = _create_cc(client, admin, code="CC-SF1")
+    cc2 = _create_cc(client, admin, code="CC-SF2")
+    dev1 = _token(client, "dev1")
+    dev2 = _token(client, "dev2")
+
+    # dev1 → pending on cc1; dev2 → rejected on cc2
+    client.post(
+        "/api/key-requests", json={"cost_centre_id": cc1["id"]}, headers=_auth(dev1)
+    )
+    r2 = client.post(
+        "/api/key-requests", json={"cost_centre_id": cc2["id"]}, headers=_auth(dev2)
+    )
+    client.post(
+        f"/api/key-requests/{r2.json()['request']['id']}/reject",
+        json={"rejection_reason": "no"},
+        headers=_auth(admin),
+    )
+
+    pending = client.get("/api/key-requests?status=pending", headers=_auth(admin))
+    assert {r["status"] for r in pending.json()} == {"pending"}
+    rejected = client.get("/api/key-requests?status=rejected", headers=_auth(admin))
+    assert {r["status"] for r in rejected.json()} == {"rejected"}
+
+
+# ---------------------------------------------------------------------------
+# Provisioning failure → 502, rollback + AWS compensation
+# ---------------------------------------------------------------------------
+
+
+class _FailingAws(MockAwsService):
+    """Mock that creates the inference profile(s) then fails at provision_key.
+
+    Lets us assert the failure is mapped to 502, the request stays pending
+    (DB rolled back), and the freshly-created profile is compensated away
+    (so the AWS state does not drift from the DB and a retry would work).
+    """
+
+    def provision_key(self, **kwargs):  # type: ignore[override]
+        raise AwsServiceError("simulated provisioning failure")
+
+
+def test_provisioning_failure_returns_502_and_rolls_back(
+    client: TestClient, seeded: Session, db_session: Session
+) -> None:
+    failing = _FailingAws()
+    app.dependency_overrides[get_aws_service] = lambda: failing
+    try:
+        admin = _token(client, "admin")
+        cc = _create_cc(client, admin, code="CC-FAIL")
+        dev = _token(client, "dev1")
+
+        req_resp = client.post(
+            "/api/key-requests",
+            json={"cost_centre_id": cc["id"]},
+            headers=_auth(dev),
+        )
+        request_id = req_resp.json()["request"]["id"]
+
+        resp = client.post(
+            f"/api/key-requests/{request_id}/approve",
+            json={},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 502, resp.text
+
+        # No key was ever created (provision_key failed before the Key row).
+        assert (
+            db_session.scalar(select(Key).where(Key.cost_centre_id == cc["id"]))
+            is None
+        )
+        # AWS side-effect compensated: the profile created mid-provisioning was
+        # deleted, so the mock's state did not drift from the (rolled-back) DB and
+        # a retry with a healthy service could recreate it. (The DB rollback itself
+        # is handled by get_db in production; the shared test session is reset at
+        # teardown.)
+        assert failing._profile_index == {}
+    finally:
+        app.dependency_overrides.pop(get_aws_service, None)
