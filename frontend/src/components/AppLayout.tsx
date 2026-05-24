@@ -22,6 +22,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <NavLink to="/key-requests" className="nav__link">
             Key requests
           </NavLink>
+          <NavLink to="/keys" className="nav__link">
+            Keys
+          </NavLink>
         </nav>
         <div className="nav__user">
           {user && (

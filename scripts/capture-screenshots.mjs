@@ -22,18 +22,25 @@ const H = 1480
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const shots = [
-  { file: '01-login.png', path: '/login', auth: false },
-  { file: '02-home.png', path: '/', auth: true },
-  { file: '03-cost-centres.png', path: '/cost-centres', auth: true },
-  { file: '04-key-requests.png', path: '/key-requests', auth: true },
-]
+// Default run captures the core pages as admin. Override with CLI args for a
+// single custom shot as any user:  node capture-screenshots.mjs <user> <path> <file>
+const [, , argUser, argPath, argFile] = process.argv
+const USER = argUser || 'admin'
+const shots =
+  argUser && argPath && argFile
+    ? [{ file: argFile, path: argPath, auth: true }]
+    : [
+        { file: '01-login.png', path: '/login', auth: false },
+        { file: '02-home.png', path: '/', auth: true },
+        { file: '03-cost-centres.png', path: '/cost-centres', auth: true },
+        { file: '04-key-requests.png', path: '/key-requests', auth: true },
+      ]
 
 async function getToken() {
   const res = await fetch(`${BACKEND}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: 'admin' }),
+    body: JSON.stringify({ username: USER, password: USER }),
   })
   if (!res.ok) throw new Error(`login failed: ${res.status}`)
   return (await res.json()).access_token

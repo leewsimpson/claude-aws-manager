@@ -8,6 +8,7 @@ import type {
   KeyRequestResult,
   ProvisionedKey,
 } from '../features/keyRequests/types'
+import type { Key, KeyStatus } from '../features/keys/types'
 
 export const TEST_TOKEN = 'test-token-123'
 export const ADMIN_TOKEN = 'admin-token-456'
@@ -204,6 +205,57 @@ function makeProvisionedKey(
       profile_name: `${request.cost_centre_code}-${m}`,
     })),
   }
+}
+
+// ---- Keys store ----
+
+let nextKeyId = 1
+let keys: Key[] = []
+
+function seedKeys(): Key[] {
+  return []
+}
+
+export function resetKeyStore() {
+  nextKeyId = 1
+  keys = seedKeys()
+}
+resetKeyStore()
+
+/** Directly inject a key into the store so tests don't need a full flow.
+ *  Returns the seeded key. */
+export function seedKey(overrides?: Partial<Key>): Key {
+  const cc = costCentres[0]!
+  const id = `key-seed-${nextKeyId++}`
+  const now = '2026-05-24T10:00:00Z'
+  const defaultModels = ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5']
+  const key: Key = {
+    id,
+    developer_id: TEST_USER.id,
+    developer_username: TEST_USER.username,
+    developer_display_name: TEST_USER.display_name,
+    cost_centre_id: cc.id,
+    cost_centre_code: cc.code,
+    cost_centre_name: cc.name,
+    iam_username: `claude-${TEST_USER.username}-${cc.code.toLowerCase()}`,
+    status: 'active',
+    allowed_models: defaultModels,
+    rolling_limit: null,
+    rolling_period_days: null,
+    lifetime_budget: null,
+    lifetime_spend: 0,
+    expires_at: null,
+    created_at: now,
+    revoked_at: null,
+    inference_profiles: defaultModels.map((m) => ({
+      model_id: m,
+      profile_arn: `arn:aws:bedrock:ap-southeast-2:123456789:inference-profile/${cc.code.toLowerCase()}-${m.replace(/\./g, '-')}`,
+      profile_name: `${cc.code}-${m}`,
+    })),
+    ...overrides,
+  }
+  keys = [...keys, key]
+  return key
 }
 
 const unauthorised = () =>
@@ -514,5 +566,94 @@ export const handlers = [
 
     const result: KeyRequestResult = { request: req, key: null }
     return HttpResponse.json(result)
+  }),
+
+  // ---- Keys ----
+
+  http.get('/api/keys', ({ request }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const url = new URL(request.url)
+    const statusFilter = url.searchParams.get('status') as KeyStatus | null
+    const ccFilter = url.searchParams.get('cost_centre_id')
+    const developerFilter = url.searchParams.get('developer_id')
+
+    const userId = getRequestingUserId(request)
+    const isReviewer = isAdmin(request) || isCco(request)
+
+    let visible = isReviewer
+      ? keys
+      : keys.filter((k) => k.developer_id === userId)
+
+    if (statusFilter) visible = visible.filter((k) => k.status === statusFilter)
+    if (ccFilter) visible = visible.filter((k) => k.cost_centre_id === ccFilter)
+    if (developerFilter) visible = visible.filter((k) => k.developer_id === developerFilter)
+
+    return HttpResponse.json(visible)
+  }),
+
+  http.get('/api/keys/:id', ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const key = keys.find((k) => k.id === params.id)
+    if (!key) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    return HttpResponse.json(key)
+  }),
+
+  http.post('/api/keys/:id/revoke', ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const key = keys.find((k) => k.id === params.id)
+    if (!key) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const userId = getRequestingUserId(request)
+    const isReviewer = isAdmin(request) || isCco(request)
+    // Only the owner or a reviewer can revoke
+    if (!isReviewer && key.developer_id !== userId) return forbidden()
+    key.status = 'revoked'
+    key.revoked_at = new Date().toISOString()
+    return HttpResponse.json(key)
+  }),
+
+  http.post('/api/keys/:id/regenerate', ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const key = keys.find((k) => k.id === params.id)
+    if (!key) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const userId = getRequestingUserId(request)
+    // Only the key owner can regenerate
+    if (key.developer_id !== userId) return forbidden()
+    const provisioned: ProvisionedKey = {
+      id: key.id,
+      cost_centre_id: key.cost_centre_id,
+      cost_centre_code: key.cost_centre_code,
+      iam_username: key.iam_username,
+      status: key.status,
+      allowed_models: key.allowed_models,
+      rolling_limit: key.rolling_limit,
+      rolling_period_days: key.rolling_period_days,
+      lifetime_budget: key.lifetime_budget,
+      expires_at: key.expires_at,
+      bearer_token: `mock-regen-bearer-${key.id}`,
+      inference_profiles: key.inference_profiles,
+    }
+    return HttpResponse.json(provisioned)
+  }),
+
+  http.patch('/api/keys/:id/constraints', async ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    if (!isAdmin(request) && !isCco(request)) return forbidden()
+    const key = keys.find((k) => k.id === params.id)
+    if (!key) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const body = (await request.json()) as {
+      allowed_models?: string[]
+      rolling_limit?: number | null
+      rolling_period_days?: number | null
+      lifetime_budget?: number | null
+      expiry_days?: number | null
+    }
+    if (body.allowed_models !== undefined) key.allowed_models = body.allowed_models
+    if (body.rolling_limit !== undefined) key.rolling_limit = body.rolling_limit
+    if (body.rolling_period_days !== undefined) key.rolling_period_days = body.rolling_period_days
+    if (body.lifetime_budget !== undefined) key.lifetime_budget = body.lifetime_budget
+    if (body.expiry_days !== undefined && body.expiry_days !== null) {
+      key.expires_at = new Date(Date.now() + body.expiry_days * 86400000).toISOString()
+    }
+    return HttpResponse.json(key)
   }),
 ]

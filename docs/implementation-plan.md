@@ -129,20 +129,22 @@ High-level development sequence for the Claude Code AWS Bedrock Manager PoC. Eac
 
 **Goal:** Developers and CCOs can view, manage, and revoke active keys.
 
-- [ ] API endpoints:
+- [x] API endpoints:
   - `GET /api/keys` — list keys (scoped by role)
   - `POST /api/keys/{id}/revoke` — revoke (developer revokes own; CCO/admin revokes any in scope)
   - `POST /api/keys/{id}/regenerate` — reset credential, return new token (once)
   - `PATCH /api/keys/{id}/constraints` — CCO updates constraints on active key
-- [ ] Revocation → call AWS layer (delete IAM user, cleanup) → update DB status
-- [ ] Regeneration → call AWS layer (ResetServiceSpecificCredential) → display new token
-- [ ] Frontend — Developer Dashboard:
-  - All active keys (one per CC), with status badges (Active, Expired, Revoked, Stopped, Pending)
-  - Key details: cost centre, constraints, current spend vs limits, expiry
+- [x] Revocation → call AWS layer (delete IAM user, cleanup) → update DB status
+- [x] Regeneration → call AWS layer (ResetServiceSpecificCredential) → display new token
+- [x] Frontend — Developer Dashboard:
+  - All keys (one per CC), with status badges (Active, Stopped, Revoked, Expired)
+  - Key details: cost centre, constraints, spend vs limits (`lifetime_spend`; live usage Phase 7), expiry
   - Revoke / Regenerate actions
-  - Setup instructions per key (env vars, modelOverrides JSON)
-- [ ] Frontend — Admin Key Management:
-  - All keys across org, search/filter by developer/CC/status
+  - Setup instructions per key (env var name, modelOverrides JSON from inference_profiles)
+- [x] Frontend — Admin Key Management:
+  - All keys across org, filter by developer/CC/status
+
+> **Resolved during build:** regenerate is dev-owner/admin only (the token is the developer's secret; CCO→403); revoke = dev-owner/CCO/admin; constraints = CCO/admin only. `GET /api/keys` returns a plain array (design.md §7 pagination stays a PoC-wide deferral).
   - Revoke any key
 
 **Outputs:** Developers have a functional dashboard. Keys can be managed through their full lifecycle.

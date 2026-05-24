@@ -11,7 +11,7 @@ High-level progress tracker for the build. Complements [implementation-plan.md](
 | 3 | Cost Centre Management (Admin) | ✅ Done |
 | 4 | AWS Integration Layer (Mock Only) | ✅ Done |
 | 5 | Key Request & Approval Flow | ✅ Done |
-| 6 | Key Management & Developer Dashboard | ⬜ Not started |
+| 6 | Key Management & Developer Dashboard | ✅ Done |
 | 7 | Cost Tracking & Budget Enforcement | ⬜ Not started |
 | 8 | Dashboards & Visualisations | ⬜ Not started |
 | 9 | Budget Alerts & Global Policies | ⬜ Not started |
@@ -480,3 +480,82 @@ Applied a cohesive, committed **dark-only technical-console** visual system acro
 
 - **Pixels finally verified.** Connected the Chrome extension and loaded the running app at `:5173` — login, home, cost-centres, key-requests all render correctly. This closes the "browser render unverified" gap flagged in **every** prior phase (P1–P5).
 - **Latent bug found + fixed in the process:** the **frontend container had been serving a broken app since Phase 2** — its anonymous `/app/node_modules` volume predated the P2 `react-router-dom`/`@tanstack/react-query` additions, so Vite threw `Failed to resolve import` while host `npm run build`/tests passed. Nobody noticed because the browser was never opened before now. Fixed via `docker compose up -d --build --force-recreate --renew-anon-volumes frontend`; recorded as Gotcha (4) in CLAUDE.md. **Lesson: "host build passes" ≠ "the dockerised dev server works" — actually open the browser each phase.**
+
+---
+
+## Phase 6 — Key Management & Developer Dashboard
+
+**Goal:** Developers see and manage their provisioned keys (revoke, regenerate-to-recover-token, setup instructions); CCOs/admins manage keys in scope (revoke, edit constraints); admins get an org-wide key view with filters. No new tables (keys/inference_profiles exist from P5) → **no migration**.
+
+### Plan — two parallel agents against a frozen contract (P1–P5 pattern)
+
+**Frozen API contract** (`/api/keys`, all auth'd). Plain arrays (matches existing endpoints; design.md §7 pagination stays aspirational/unimplemented PoC-wide).
+
+`KeyOut`: `{id, developer_id, developer_username, developer_display_name, cost_centre_id, cost_centre_code, cost_centre_name, iam_username, status, allowed_models, rolling_limit, rolling_period_days, lifetime_budget, lifetime_spend, expires_at, created_at, revoked_at, inference_profiles:[{model_id, profile_arn, profile_name}]}`. **No bearer_token** (never stored). `inference_profiles` is joined from the CC's active profiles for the key's `allowed_models` so the dashboard can render `modelOverrides` setup instructions.
+
+- `GET /api/keys?status=&cost_centre_id=&developer_id=` — scoped: developer=own; CCO=keys in CCs they own (∪ own); admin=all. Filters apply within scope. Ordered created_at desc. → `200 [KeyOut]`.
+- `GET /api/keys/{id}` → `200 KeyOut` (404 if not visible).
+- `POST /api/keys/{id}/revoke` — dev-owner / CCO-of-CC / admin (else 404 if not visible). 409 unless status ∈ {active,stopped}. `aws.revoke_key` (swallow `KeyNotFoundError`) → status `revoked`, `revoked_at`, audit `key.revoked`. → `200 KeyOut`.
+- `POST /api/keys/{id}/regenerate` — **dev-owner / admin** (the token is the developer's secret; a CCO who can see the key but isn't owner/admin → 403). 409 unless status ∈ {active,stopped}. `aws.reset_key(credential_id)` → new bearer token (credential_id unchanged, mirroring `ResetServiceSpecificCredential`). audit `key.regenerated`. → `200 ProvisionedKeyOut` (reused from P5; bearer token shown once).
+- `PATCH /api/keys/{id}/constraints` — **CCO-of-CC / admin** (dev-owner-only → 403; not visible → 404). 409 unless status ∈ {active,stopped}. Partial body `{allowed_models?, rolling_limit?, rolling_period_days?, lifetime_budget?, expiry_days?}`. `allowed_models` must be ⊆ global allowed; on change → ensure an active `InferenceProfile` per new model (create + persist, compensating on failure) **then** `aws.update_model_policy(iam_username, allowed_models)`. `expiry_days` → `expires_at = now + days`. audit `key.constraints_updated` (old/new diff). → `200 KeyOut`.
+
+Authz helpers mirror P5 (`_can_see` → 404 vs 403). Reuse `app/core/request.py::client_ip`, `record_audit`, and the P5 `compensate_aws`/profile-ensure pattern for the constraints model-change path.
+
+**Spend:** `lifetime_spend` is surfaced (currently 0 — nothing updates it until Phase 7 budget enforcement); the dashboard shows limits + lifetime_spend honestly, no fabricated usage. `key.stopped`/`key.restarted` transitions remain Phase 7.
+
+- **Agent A (backend):** `schemas/key.py` (KeyOut, KeyConstraintsUpdate) + `api/keys.py` (5 endpoints) + register in `main.py` + `tests/test_keys.py` (scoping, revoke, regenerate-token-once, constraints incl. model-policy change + RBAC 403/404 + 409 guards + audit). Runs pytest.
+- **Agent B (frontend):** `features/keys/{types,api}.ts` + role-adaptive `KeysPage` (developer "My keys" dashboard with revoke/regenerate→TokenReveal/setup instructions; CCO/admin management table with filters + inline constraints editor) + nav link + `/keys` route + MSW + Vitest. Reuses `TokenReveal`. Runs build + vitest.
+- **Orchestrator (me):** freeze contract, integrate, full validation (pytest + build + vitest), live-browser screenshots into `screenshots/` via `scripts/capture-screenshots.mjs`, review pass, retro + docs.
+
+### Progress
+
+- [x] Agent A (backend): keys schemas + router + register + tests
+- [x] Agent B (frontend): keys feature + dashboard/management page + nav/route + MSW + Vitest
+- [x] Integrate: full pytest + build + vitest green
+- [x] Orchestrator review + live screenshots + docs/retro
+
+### Decisions taken during build
+
+- **Five endpoints under `/api/keys`** exactly as the frozen contract. `KeyOut` carries `inference_profiles[]` (joined from the CC's active profiles for the key's `allowed_models`) so the dashboard renders `modelOverrides` setup instructions; **no bearer_token** anywhere on `KeyOut`/list.
+- **Regenerate is the developer-obtains-own-token path** (design.md §4.3): dev-owner or admin only — a CCO who can *see* a key but isn't owner/admin gets **403** (the token is the developer's secret). Returns the reused `ProvisionedKeyOut` (token shown once); `credential_id` is unchanged (mirrors `ResetServiceSpecificCredential`).
+- **Revoke** allowed for dev-owner / CCO-of-CC / admin; visible-set == allowed-set, so non-visible callers get 404 (no see-but-can't-revoke middle ground). **Constraints** allowed for CCO-of-CC / admin only (dev-owner-only → 403). All three guard `status ∈ {active,stopped}` → else 409. 404-vs-403 follows the P5 `_can_see` convention.
+- **Constraints `allowed_models` change reuses the P5 provisioning pattern**: ensure an active `InferenceProfile` per new model (create + persist) **then** `aws.update_model_policy`; on `AwsServiceError`, `compensate_aws` deletes the freshly-created profiles before surfacing 502. `expiry_days` → `expires_at = now + days`.
+- **Spend shown honestly:** `lifetime_spend` surfaced (0.00) against `lifetime_budget` with a "live usage tracking arrives in Phase 7" label — no fabricated usage. `key.stopped`/`key.restarted` remain Phase 7.
+- **No migration** (keys/inference_profiles exist from P5). **No new deps.**
+- **Pagination** (design.md §7) intentionally **not** implemented — `GET /api/keys` returns a plain array like every other list endpoint; pagination stays a PoC-wide deferral.
+
+### What was built
+
+```
+backend/app/schemas/key.py             KeyOut (+ inference_profiles, no token), KeyConstraintsUpdate
+backend/app/api/keys.py                GET list (scoped+filters) / GET{id} / revoke / regenerate / PATCH constraints
+backend/app/main.py                    register keys router
+backend/tests/test_keys.py             30 L3 cases (scoping, filters, revoke, regenerate-once, constraints+policy, RBAC 403/404, 409 guards, audit)
+frontend/src/features/keys/{types,api}.ts   typed client + TanStack hooks (useKeys/Revoke/Regenerate/UpdateConstraints)
+frontend/src/pages/KeysPage.tsx        role-adaptive: developer "My keys" cards (revoke confirm, regenerate→TokenReveal, setup instructions) + reviewer management table (status/CC filters, inline constraints editor)
+frontend/src/pages/KeysPage.test.tsx   17 Vitest cases
+frontend/src/{App.tsx,components/AppLayout.tsx,App.css,mocks/handlers.ts,test/setup.ts}  route + nav + badge/card styles + keys MSW store
+scripts/capture-screenshots.mjs        generalised: optional `<user> <path> <file>` args for per-user shots
+screenshots/05-keys-developer.png, 06-keys-admin.png
+```
+
+### Validation
+
+- Backend: **123 passed** (93 prior + 30 keys). Frontend: `npm run build` clean; **41 Vitest** (24 prior + 17 keys).
+- **Live browser (`:5173`, real data seeded via the API):** developer dashboard renders key cards (models, rolling/lifetime limits with the honest Phase-7 spend label, expiry, ACTIVE/REVOKED badges, Setup/Regenerate/Revoke) and the admin management table renders all keys across developers/CCs with status+CC filters and Edit-constraints/Revoke (correctly hidden on revoked rows). Screenshots committed.
+
+### Retro
+
+**What went well**
+- The frozen-contract + two-parallel-agents pattern continues to pay off: backend (123) and frontend (41) integrated with zero interface drift on the orchestrator's first run, and the design system meant the new pages were on-brand with no extra styling work (agents reused the existing tokens/classes).
+- Phase 5's investments compounded: `_can_see`/404-vs-403, `compensate_aws`, `ProvisionedKeyOut`, `client_ip`, and `TokenReveal` were all reused directly — Phase 6 added almost no new primitives.
+- Live verification is now routine (the P5 `capture-screenshots.mjs` generalised to per-user shots), so "pixels verified" held this phase too.
+
+**What bit us (and the lesson)**
+- **Vite didn't serve brand-new route/page files until the container was restarted.** The agents' `KeysPage.tsx` + new `/keys` route were correct on disk and host tests passed, but the running dev server's first `/keys` capture landed on Home (stale module graph; nav lacked the link). A `docker compose restart frontend` fixed it. **Lesson: when a phase adds *new* frontend files/routes (not just edits), restart the frontend dev server before browser-verifying — HMR doesn't always fold in new route modules.** (Noted as Gotcha (5) in CLAUDE.md.)
+- **git-bash mangled the `/keys` CLI arg** into a Windows path (MSYS path conversion), producing `Cannot navigate to invalid URL`. Fixed with `MSYS_NO_PATHCONV=1`. **Lesson: prefix Node/CLI invocations that take leading-slash path args with `MSYS_NO_PATHCONV=1` in this environment.**
+
+**Carry-forward for Phase 7**
+- Phase 7 (Cost Tracking & Budget Enforcement) adds `usage_snapshots` + `pricing_cache` tables (migration) and the background polling loop that finally **populates `lifetime_spend`** and drives `key.stopped`/`key.restarted` transitions — at which point the dashboard's "$0.00 … Phase 7" placeholder becomes real spend, and the `/keys/{id}/usage` + CC usage endpoints arrive.
+- Reuse `get_usage_metrics`/`parse_invocation_logs` (mock already accrues usage) + `record_audit` for stop/restart; tune `usage.py::base_tokens_per_minute` so a demo key crosses a 50/7-day rolling limit in a sensible wall-clock window.
+- The constraints `expiry_days` semantics (`now + days`) and the inference-profile-on-model-change path are now established — Phase 10 expiry automation should reuse them.
