@@ -245,19 +245,22 @@ def archive_cost_centre(
                 ip_address=_client_ip(request),
             )
 
-        # Revoke active/stopped keys
+        # Revoke active/stopped keys and tear down unclaimed ('ready') identities
         active_keys = db.scalars(
             select(Key).where(
                 Key.cost_centre_id == cc.id,
-                Key.status.in_(["active", "stopped"]),
+                Key.status.in_(["active", "stopped", "ready"]),
             )
         ).all()
         for key in active_keys:
             try:
-                aws.revoke_key(
-                    iam_username=key.iam_username,
-                    credential_id=key.credential_id,
-                )
+                if key.credential_id is not None:
+                    aws.revoke_key(
+                        iam_username=key.iam_username,
+                        credential_id=key.credential_id,
+                    )
+                else:
+                    aws.delete_key_identity(iam_username=key.iam_username)
             except KeyNotFoundError:
                 pass  # already gone on the AWS side — still mark revoked
             key.status = "revoked"

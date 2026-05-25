@@ -182,6 +182,92 @@ class TestLifecycle:
             svc.revoke_key(iam_username="claude-x-cc1234", credential_id="nope")
 
 
+class TestDeferredCredential:
+    """The split flow: create_key_identity (at approval) then issue_credential (at retrieve)."""
+
+    def test_identity_then_credential(self) -> None:
+        svc = _svc()
+        svc.create_key_identity(
+            iam_username="claude-dev1-cc1234",
+            cost_centre_code=CC,
+            allowed_models=[SONNET],
+            expiry_days=90,
+        )
+        prov = svc.issue_credential(iam_username="claude-dev1-cc1234")
+        assert prov.credential_id
+        assert prov.bearer_token.startswith("br-")
+
+    def test_duplicate_identity_raises(self) -> None:
+        svc = _svc()
+        svc.create_key_identity(
+            iam_username="claude-dev1-cc1234",
+            cost_centre_code=CC,
+            allowed_models=[SONNET],
+            expiry_days=90,
+        )
+        with pytest.raises(DuplicateKeyError):
+            svc.create_key_identity(
+                iam_username="claude-dev1-cc1234",
+                cost_centre_code=CC,
+                allowed_models=[SONNET],
+                expiry_days=90,
+            )
+
+    def test_issue_without_identity_raises(self) -> None:
+        svc = _svc()
+        with pytest.raises(KeyNotFoundError):
+            svc.issue_credential(iam_username="claude-ghost-cc1234")
+
+    def test_issue_twice_raises(self) -> None:
+        svc = _svc()
+        svc.create_key_identity(
+            iam_username="claude-dev1-cc1234",
+            cost_centre_code=CC,
+            allowed_models=[SONNET],
+            expiry_days=90,
+        )
+        svc.issue_credential(iam_username="claude-dev1-cc1234")
+        with pytest.raises(DuplicateKeyError):
+            svc.issue_credential(iam_username="claude-dev1-cc1234")
+
+    def test_no_usage_accrues_before_issue(self) -> None:
+        """A bare identity (no credential) produces no invocation-log usage."""
+        clock = Clock()
+        svc = _svc(clock)
+        t0 = clock.now
+        svc.create_inference_profile(cost_centre_code=CC, model_id=SONNET)
+        svc.create_key_identity(
+            iam_username="claude-dev1-cc1234",
+            cost_centre_code=CC,
+            allowed_models=[SONNET],
+            expiry_days=90,
+        )
+        clock.advance(minutes=60)
+        assert svc.parse_invocation_logs(since=t0) == []
+
+    def test_delete_identity_then_reuse(self) -> None:
+        svc = _svc()
+        svc.create_key_identity(
+            iam_username="claude-dev1-cc1234",
+            cost_centre_code=CC,
+            allowed_models=[SONNET],
+            expiry_days=90,
+        )
+        svc.delete_key_identity(iam_username="claude-dev1-cc1234")
+        # Username free again after deletion.
+        svc.create_key_identity(
+            iam_username="claude-dev1-cc1234",
+            cost_centre_code=CC,
+            allowed_models=[SONNET],
+            expiry_days=90,
+        )
+
+    def test_delete_unknown_identity_raises(self) -> None:
+        svc = _svc()
+        with pytest.raises(KeyNotFoundError):
+            svc.delete_key_identity(iam_username="claude-ghost-cc1234")
+
+
 # --------------------------------------------------------------------------
 # IAM policy — exact ARNs (Decision #3/#13)
 # --------------------------------------------------------------------------

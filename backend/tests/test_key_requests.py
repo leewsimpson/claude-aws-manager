@@ -108,9 +108,11 @@ def test_developer_creates_pending_request(
     assert body["request"]["developer_username"] == "dev1"
 
 
-def test_cco_auto_approval_returns_key_and_bearer_token(
+def test_cco_auto_approval_creates_ready_key_without_token(
     client: TestClient, seeded: Session
 ) -> None:
+    """Auto-approval provisions a 'ready' key but never returns a token in the
+    response — even the CCO-as-requester retrieves it separately."""
     admin = _token(client, "admin")
     cc = _create_cc(client, admin, code="CC-AUTO")
     _make_cco_of(seeded, "ccowner1", cc["id"])
@@ -125,10 +127,14 @@ def test_cco_auto_approval_returns_key_and_bearer_token(
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["request"]["status"] == "approved"
-    assert body["key"] is not None
-    assert body["key"]["bearer_token"].startswith("br-")
-    assert body["key"]["status"] == "active"
-    assert len(body["key"]["inference_profiles"]) > 0
+    assert body["key"] is None
+
+    # A 'ready' key now exists for the requester, awaiting retrieval.
+    keys = client.get("/api/keys", headers=_auth(cco)).json()
+    ready = [k for k in keys if k["cost_centre_id"] == cc["id"]]
+    assert len(ready) == 1
+    assert ready[0]["status"] == "ready"
+    assert ready[0]["token_retrieved_at"] is None
 
 
 def test_cco_auto_approval_creates_inference_profiles(
@@ -146,8 +152,9 @@ def test_cco_auto_approval_creates_inference_profiles(
         headers=_auth(cco),
     )
     assert resp.status_code == 201, resp.text
-    key_data = resp.json()["key"]
-    # Should have a profile for each allowed model
+    # Profiles exist on the provisioned 'ready' key (fetched, not returned inline).
+    keys = client.get("/api/keys", headers=_auth(cco)).json()
+    key_data = next(k for k in keys if k["cost_centre_id"] == cc["id"])
     assert len(key_data["inference_profiles"]) >= 1
     for profile in key_data["inference_profiles"]:
         assert "profile_arn" in profile
@@ -182,8 +189,12 @@ def test_admin_approve_with_constraint_overrides(
     assert approve_resp.status_code == 200, approve_resp.text
     body = approve_resp.json()
     assert body["request"]["status"] == "approved"
-    assert body["key"] is not None
-    key = body["key"]
+    assert body["key"] is None  # token never returned to the approver
+
+    # Constraints landed on the provisioned 'ready' key.
+    keys = client.get("/api/keys", headers=_auth(dev)).json()
+    key = next(k for k in keys if k["cost_centre_id"] == cc["id"])
+    assert key["status"] == "ready"
     assert key["allowed_models"] == ["anthropic.claude-haiku-4-5"]
     assert key["rolling_limit"] == 25.0
     assert key["rolling_period_days"] == 14
@@ -511,9 +522,11 @@ def test_own_developer_cannot_approve_own_request(
 # ---------------------------------------------------------------------------
 
 
-def test_bearer_token_present_in_provisioning_response(
+def test_token_withheld_from_approver_revealed_on_developer_retrieve(
     client: TestClient, seeded: Session
 ) -> None:
+    """The approver (admin/CCO) never receives the token; only the developer
+    retrieves it, from the Keys page, after approval."""
     admin = _token(client, "admin")
     cc = _create_cc(client, admin, code="CC-BT1")
     dev = _token(client, "dev1")
@@ -525,13 +538,26 @@ def test_bearer_token_present_in_provisioning_response(
     )
     request_id = req_resp.json()["request"]["id"]
 
+    # Approval response carries no key/token.
     approve_resp = client.post(
         f"/api/key-requests/{request_id}/approve",
         json={},
         headers=_auth(admin),
     )
-    key = approve_resp.json()["key"]
-    assert key["bearer_token"] is not None
+    assert approve_resp.status_code == 200
+    assert approve_resp.json()["key"] is None
+
+    # The developer finds the ready key and retrieves the token themselves.
+    ready = next(
+        k
+        for k in client.get("/api/keys", headers=_auth(dev)).json()
+        if k["cost_centre_id"] == cc["id"]
+    )
+    retrieve_resp = client.post(
+        f"/api/keys/{ready['id']}/retrieve", headers=_auth(dev)
+    )
+    assert retrieve_resp.status_code == 200, retrieve_resp.text
+    key = retrieve_resp.json()
     assert key["bearer_token"].startswith("br-")
 
 
@@ -787,14 +813,14 @@ def test_list_status_filter(client: TestClient, seeded: Session) -> None:
 
 
 class _FailingAws(MockAwsService):
-    """Mock that creates the inference profile(s) then fails at provision_key.
+    """Mock that creates the inference profile(s) then fails at identity creation.
 
     Lets us assert the failure is mapped to 502, the request stays pending
     (DB rolled back), and the freshly-created profile is compensated away
     (so the AWS state does not drift from the DB and a retry would work).
     """
 
-    def provision_key(self, **kwargs):  # type: ignore[override]
+    def create_key_identity(self, **kwargs):  # type: ignore[override]
         raise AwsServiceError("simulated provisioning failure")
 
 

@@ -197,6 +197,19 @@ class AwsService(ABC):
     ) -> None:
         """Re-populate in-memory key state from the DB on startup. No-op by default."""
 
+    def rehydrate_identity(
+        self,
+        *,
+        iam_username: str,
+        cost_centre_code: str,
+        allowed_models: list[str],
+    ) -> None:
+        """Re-populate the identity of an unclaimed ('ready') key from the DB. No-op by default.
+
+        Needed so a developer can still ``issue_credential`` after a restart for a
+        key that was approved but whose token was never retrieved.
+        """
+
     # -- abstract interface ---------------------------------------------------
 
     @abstractmethod
@@ -208,7 +221,43 @@ class AwsService(ABC):
         allowed_models: list[str],
         expiry_days: int,
     ) -> ProvisionedKey:
-        """Create a key (backing IAM user + scoped policy) and return its bearer token."""
+        """Create the identity *and* issue a credential in one step (test/convenience).
+
+        Equivalent to :meth:`create_key_identity` followed by :meth:`issue_credential`.
+        The app's provisioning flow does **not** use this — it creates the identity at
+        approval and defers credential issuance to the developer's retrieval (so the
+        approver never sees the token). Retained as a primitive for the mock test-suite.
+        """
+
+    @abstractmethod
+    def create_key_identity(
+        self,
+        *,
+        iam_username: str,
+        cost_centre_code: str,
+        allowed_models: list[str],
+        expiry_days: int,
+    ) -> None:
+        """Create the backing IAM user + scoped policy WITHOUT issuing a credential.
+
+        Provisioning at approval time creates only the identity so the approver never
+        sees a token; the developer later claims the credential via
+        :meth:`issue_credential`. Raises :class:`DuplicateKeyError` if the username is
+        already in use.
+        """
+
+    @abstractmethod
+    def issue_credential(self, *, iam_username: str) -> ProvisionedKey:
+        """Mint the service-specific credential (bearer token) for an existing identity.
+
+        Called when the developer retrieves their key. The token is returned once and
+        never persisted. Raises :class:`KeyNotFoundError` if no identity exists and
+        :class:`DuplicateKeyError` if a credential was already issued.
+        """
+
+    @abstractmethod
+    def delete_key_identity(self, *, iam_username: str) -> None:
+        """Delete an IAM identity (used to clean up an unclaimed 'ready' key)."""
 
     @abstractmethod
     def revoke_key(self, *, iam_username: str, credential_id: str) -> None:

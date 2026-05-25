@@ -658,3 +658,24 @@ docker-compose.yml                           backend demo-acceleration env
 - `alert_history`/`alert_configs` (P9) can hang off the same poll cycle (threshold checks on the spend it already computes) — wire the alert engine into `run_poll_cycle`.
 - Residual demo data persists in the dev DB (several stopped/revoked keys, `CC-P7-*`); harmless local residue, consistent with prior phases. The accelerated compose env (`USAGE_TOKENS_PER_MINUTE=8000000`) will keep stopping keys quickly — reset to realistic values or remove the override when not demoing.
 - Reconcile the synthetic-usage shape + pricing against real AWS in Phase 11 (still the only unproven assumption, isolated in `usage.py`).
+
+---
+
+## Phase 7.1 — Deferred credential / developer-only token retrieval
+
+**Trigger:** spotted that approval returned the bearer token *to the approver* (CCO/Admin), then the developer had to regenerate to get a usable one — a separation-of-duties hole (the approver walked away with a working credential bound to the developer's identity).
+
+**Decision:** decouple token *reveal* from approval; the developer claims it in their own session. Does **not** change the core architecture — it strengthens the "tokens never stored" invariant (see `design-decisions.md` §10). Bottom-up changes:
+
+- **AWS layer** (`services/aws`): split provisioning — `create_key_identity` (IAM user + policy, no credential) and `issue_credential` (mints the token for an existing identity), plus `delete_key_identity` and `rehydrate_identity`. `provision_key` retained as a test/convenience composition. Mock now tracks `_identities` (keyed by `iam_username`) separately from issued credentials.
+- **Model / migration** (`d4e5f6a7b8c9`): `keys.credential_id` nullable; new `token_retrieved_at`; partial unique index extended to `status IN ('active','stopped','ready')` so a `ready` key reserves the one-per-dev-per-CC slot.
+- **Provisioning / approval**: `provision_for_request` creates only the identity → key `ready`, `credential_id = NULL`; approve + auto-approve return `key = None` (no token). Compensation now tears down the identity.
+- **Keys API**: new `POST /keys/{id}/retrieve` (owner or admin) → `issue_credential` → token once, key `active`, `token_retrieved_at` stamped, audit `key.token_retrieved`. Revoke + archive-cascade handle `ready` (no credential → `delete_key_identity`). `rehydrate_aws_from_db` re-registers `ready` identities so retrieval survives a restart.
+- **Frontend**: approval screens show a confirmation (never a token); developer Keys page gets a "ready" banner + per-key **Retrieve token** action that surfaces the existing `TokenReveal` once. New `useRetrieveToken`; `KeyStatus` gains `ready`; `Key`/`KeyOut` gain `token_retrieved_at`.
+
+### Validation
+
+- Backend: **155 passed** (`uv run pytest`), incl. new retrieve RBAC/409 tests, the rewritten "token withheld from approver, revealed on developer retrieve", mock identity/credential-split unit tests, and the migration round-trip exercising `d4e5f6a7b8c9` up+down. (Stale `claudeaws_test` had to be dropped once — `create_all` won't add columns to an existing table.)
+- Frontend: `npm run build` clean; **66 Vitest** pass, incl. ready→retrieve flow and the rewritten approval tests asserting **no** token reveal.
+
+**Lesson:** when a secret can only be emitted at creation time and is never stored, *who triggers creation* is the access-control decision — pushing creation into the holder's session is cleaner than trying to re-route a response.

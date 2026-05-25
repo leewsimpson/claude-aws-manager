@@ -29,6 +29,7 @@ class KeyOut(BaseModel):
     lifetime_budget: float | None
     lifetime_spend: float
     expires_at: datetime | None
+    token_retrieved_at: datetime | None
     created_at: datetime
     revoked_at: datetime | None
     inference_profiles: list[InferenceProfileRefOut]

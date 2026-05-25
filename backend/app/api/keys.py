@@ -3,10 +3,11 @@
 Mounted under ``/api`` → ``/api/keys``.
 
 Roles:
-- Developer: sees and revokes own keys; regenerates own keys.
+- Developer: sees own keys; retrieves the token for a 'ready' key (first claim),
+  regenerates and revokes own keys.
 - CCO: sees keys for their cost centres; revokes keys in their CCs;
-  patches constraints on keys in their CCs.
-- Admin: sees all keys; revokes, regenerates, and patches any key.
+  patches constraints on keys in their CCs. Cannot retrieve a developer's token.
+- Admin: sees all keys; retrieves, revokes, regenerates, and patches any key.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -142,6 +144,7 @@ def _serialise_key(db: Session, key: Key) -> KeyOut:
         lifetime_budget=float(key.lifetime_budget) if key.lifetime_budget is not None else None,
         lifetime_spend=float(key.lifetime_spend) if key.lifetime_spend is not None else 0.0,
         expires_at=key.expires_at,
+        token_retrieved_at=key.token_retrieved_at,
         created_at=key.created_at,
         revoked_at=key.revoked_at,
         inference_profiles=profiles,
@@ -269,14 +272,20 @@ def revoke_key(
             status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
         )
 
-    if key.status not in {"active", "stopped"}:
+    if key.status not in {"active", "stopped", "ready"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Key cannot be revoked (current status: {key.status!r})",
         )
 
     try:
-        aws.revoke_key(iam_username=key.iam_username, credential_id=key.credential_id)
+        if key.credential_id is not None:
+            aws.revoke_key(
+                iam_username=key.iam_username, credential_id=key.credential_id
+            )
+        else:
+            # 'ready' key — no credential was ever issued; drop the bare identity.
+            aws.delete_key_identity(iam_username=key.iam_username)
     except KeyNotFoundError:
         pass  # idempotent — already gone on the AWS side
 
@@ -353,6 +362,84 @@ def regenerate_key(
     db.commit()
     db.refresh(key)
     return _serialise_provisioned(db, key, new_token)
+
+
+@router.post("/{key_id}/retrieve", response_model=ProvisionedKeyOut)
+def retrieve_token(
+    key_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+    aws: AwsService = Depends(get_aws_service),
+) -> ProvisionedKeyOut:
+    """Issue and reveal the bearer token for a 'ready' key (dev-owner or admin only).
+
+    This is the developer's first-time credential claim: the token is minted **now**,
+    inside the developer's own authenticated session, returned once, and never stored.
+    Approval never reveals the token, so this is the only path by which the requesting
+    developer obtains it. A CCO who can see the key but is not the owner/admin gets 403.
+    """
+    is_admin = "admin" in (actor.roles or [])
+    key = db.get(Key, key_id)
+    is_owner = key is not None and key.developer_id == actor.id
+
+    # 404 if not visible at all; 403 if visible but not owner/admin
+    if key is None or not _can_see_key(db, actor, key):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
+        )
+    if not is_owner and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
+
+    if key.status != "ready" or key.credential_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Key is not awaiting retrieval (current status: {key.status!r}). "
+                "Use regenerate to mint a new token for an active key."
+            ),
+        )
+
+    try:
+        provisioned = aws.issue_credential(iam_username=key.iam_username)
+    except AwsServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"AWS error: {exc}"
+        ) from exc
+
+    now = datetime.now(timezone.utc)
+    key.credential_id = provisioned.credential_id
+    key.status = "active"
+    key.token_retrieved_at = now
+
+    record_audit(
+        db,
+        actor_id=actor.id,
+        action="key.token_retrieved",
+        entity_type="key",
+        entity_id=key.id,
+        new_values={"credential_id": provisioned.credential_id, "status": "active"},
+        ip_address=_client_ip(request),
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # Defensive: keep the freshly-issued credential from orphaning if the commit
+        # is rejected (get_db rolls the DB back, leaving the key 'ready').
+        compensate_aws(
+            aws,
+            created_profile_arns=[],
+            iam_username=key.iam_username,
+            credential_id=provisioned.credential_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Unable to activate key — please retry",
+        ) from exc
+    db.refresh(key)
+    return _serialise_provisioned(db, key, provisioned.bearer_token)
 
 
 @router.patch("/{key_id}/constraints", response_model=KeyOut)

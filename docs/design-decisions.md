@@ -251,9 +251,20 @@ Clean cost separation, simpler IAM (no policy conflicts with other workloads), i
 
 ## 10. Key Storage & Security ✅ DECIDED
 
-**Decision: Don't store the bearer token. Display once on creation/regeneration. Developer regenerates if lost.**
+**Decision: Don't store the bearer token. The developer claims it once on retrieval; regenerate if lost. Approval never reveals it.**
 
-Requirement updated: keys are no longer "retrievable" — instead developers can **regenerate** (via `ResetServiceSpecificCredential`), which issues a new bearer token and invalidates the old one.
+Requirement updated: keys are no longer "retrievable" repeatedly — instead developers can **regenerate** (via `ResetServiceSpecificCredential`), which issues a new bearer token and invalidates the old one.
+
+**Separation of duties — the token reaches only the developer (added P7.1):** because the bearer token can only be revealed at credential-creation time and is never stored, the *creation* must happen in the developer's own session — not the approver's. So approval is split from credential issuance:
+
+```
+CCO/Admin approves  → create IAM identity + policy + profiles; key.status = 'ready', credential_id = NULL
+                      (response carries NO token — the approver never sees it)
+Developer retrieves → POST /keys/{id}/retrieve → CreateServiceSpecificCredential
+                      → token shown once; key.status = 'active'; token_retrieved_at stamped
+```
+
+This closes a separation-of-duties hole: previously the approver received a working credential bound to the developer's identity. Auto-approval (a CCO requesting for their own cost centre) also lands `ready` and is retrieved like any developer — there the approver *is* the holder. Only the developer-owner (or an Admin) may retrieve; a CCO viewer cannot. In-app notification (a "ready" banner + per-key retrieve action) suffices for the PoC; email/Slack stays deferred to production.
 
 **What we store in our DB (all non-sensitive):**
 - `ServiceSpecificCredentialId` — for management operations (deactivate/reset/delete)
@@ -265,7 +276,12 @@ Requirement updated: keys are no longer "retrievable" — instead developers can
 
 **Security benefit:** No encrypted secrets in the database at all. Eliminates master key management, KMS costs, encryption-at-rest concerns, and the entire class of "stolen DB = stolen credentials" attacks.
 
-**Regeneration flow:**
+**Retrieval flow (first claim):**
+```
+Developer clicks "Retrieve token" on a 'ready' key → CreateServiceSpecificCredential → token displayed once → key active
+```
+
+**Regeneration flow (subsequent):**
 ```
 Developer clicks "Regenerate" → ResetServiceSpecificCredential → new token displayed once → old token invalidated immediately
 ```

@@ -73,10 +73,11 @@ def _provision_key(
     cc_id: str,
     admin_token: str | None = None,
 ) -> dict:
-    """Drive the real key-request + approve flow so inference_profiles exist.
+    """Drive the real request → approve → developer-retrieve flow.
 
-    Returns the ``key`` portion of the approval response (contains bearer_token
-    on first provisioning).
+    Approval provisions a 'ready' key (no token in the response); the developer then
+    retrieves the bearer token. Returns the retrieve response (an active
+    ProvisionedKeyOut with ``bearer_token``).
     """
     dev_token = _token(client, developer_username)
 
@@ -97,7 +98,19 @@ def _provision_key(
         headers=_auth(admin_token),
     )
     assert approve_resp.status_code == 200, approve_resp.text
-    return approve_resp.json()["key"]
+    # The approver never sees the token.
+    assert approve_resp.json()["key"] is None
+
+    ready = next(
+        k
+        for k in client.get("/api/keys", headers=_auth(dev_token)).json()
+        if k["cost_centre_id"] == cc_id and k["status"] == "ready"
+    )
+    retrieve_resp = client.post(
+        f"/api/keys/{ready['id']}/retrieve", headers=_auth(dev_token)
+    )
+    assert retrieve_resp.status_code == 200, retrieve_resp.text
+    return retrieve_resp.json()
 
 
 @pytest.fixture(autouse=True)
@@ -413,6 +426,118 @@ def test_admin_regenerates_any_key(client: TestClient, seeded: Session) -> None:
     key_data = _provision_key(client, seeded, developer_username="dev1", cc_id=cc["id"], admin_token=admin)
 
     resp = client.post(f"/api/keys/{key_data['id']}/regenerate", headers=_auth(admin))
+    assert resp.status_code == 200
+    assert resp.json()["bearer_token"].startswith("br-")
+
+
+# ---------------------------------------------------------------------------
+# POST /keys/{key_id}/retrieve — developer claims the deferred credential
+# ---------------------------------------------------------------------------
+
+
+def _approve_to_ready(
+    client: TestClient, *, developer_username: str, cc_id: str, admin_token: str
+) -> tuple[str, dict]:
+    """Drive request → approve so the dev has a 'ready' key. Return (dev_token, ready_key)."""
+    dev_token = _token(client, developer_username)
+    req = client.post(
+        "/api/key-requests", json={"cost_centre_id": cc_id}, headers=_auth(dev_token)
+    )
+    request_id = req.json()["request"]["id"]
+    approve = client.post(
+        f"/api/key-requests/{request_id}/approve", json={}, headers=_auth(admin_token)
+    )
+    assert approve.status_code == 200
+    assert approve.json()["key"] is None  # approver never sees the token
+    ready = next(
+        k
+        for k in client.get("/api/keys", headers=_auth(dev_token)).json()
+        if k["cost_centre_id"] == cc_id and k["status"] == "ready"
+    )
+    assert ready["status"] == "ready"
+    assert ready["token_retrieved_at"] is None
+    return dev_token, ready
+
+
+def test_developer_retrieves_ready_key(
+    client: TestClient, seeded: Session, db_session: Session
+) -> None:
+    admin = _token(client, "admin")
+    cc = _create_cc(client, admin, code="KS-RT1")
+    dev_token, ready = _approve_to_ready(
+        client, developer_username="dev1", cc_id=cc["id"], admin_token=admin
+    )
+
+    resp = client.post(f"/api/keys/{ready['id']}/retrieve", headers=_auth(dev_token))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["bearer_token"].startswith("br-")
+    assert body["status"] == "active"
+
+    # The key is now active with a retrieval timestamp, visible to the dev.
+    after = client.get(f"/api/keys/{ready['id']}", headers=_auth(dev_token)).json()
+    assert after["status"] == "active"
+    assert after["token_retrieved_at"] is not None
+
+    # Audit row written for the claim.
+    row = db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == "key.token_retrieved",
+            AuditLog.entity_id == ready["id"],
+        )
+    )
+    assert row is not None
+
+
+def test_cco_cannot_retrieve_token_403(client: TestClient, seeded: Session) -> None:
+    """A CCO who can see the key but isn't the developer-owner cannot retrieve it."""
+    admin = _token(client, "admin")
+    cc = _create_cc(client, admin, code="KS-RT2")
+    _make_cco_of(seeded, "ccowner1", cc["id"])
+    seeded.commit()
+
+    _, ready = _approve_to_ready(
+        client, developer_username="dev1", cc_id=cc["id"], admin_token=admin
+    )
+
+    cco_token = _token(client, "ccowner1")
+    resp = client.post(f"/api/keys/{ready['id']}/retrieve", headers=_auth(cco_token))
+    assert resp.status_code == 403
+
+
+def test_other_developer_retrieve_404(client: TestClient, seeded: Session) -> None:
+    admin = _token(client, "admin")
+    cc = _create_cc(client, admin, code="KS-RT3")
+    _, ready = _approve_to_ready(
+        client, developer_username="dev1", cc_id=cc["id"], admin_token=admin
+    )
+
+    dev2_token = _token(client, "dev2")
+    resp = client.post(f"/api/keys/{ready['id']}/retrieve", headers=_auth(dev2_token))
+    assert resp.status_code == 404
+
+
+def test_retrieve_active_key_409(client: TestClient, seeded: Session) -> None:
+    """Once claimed (active), retrieve is rejected — regenerate is the path instead."""
+    admin = _token(client, "admin")
+    cc = _create_cc(client, admin, code="KS-RT4")
+    key_data = _provision_key(
+        client, seeded, developer_username="dev1", cc_id=cc["id"], admin_token=admin
+    )
+
+    dev1_token = _token(client, "dev1")
+    resp = client.post(f"/api/keys/{key_data['id']}/retrieve", headers=_auth(dev1_token))
+    assert resp.status_code == 409
+
+
+def test_admin_can_retrieve_ready_key(client: TestClient, seeded: Session) -> None:
+    admin = _token(client, "admin")
+    cc = _create_cc(client, admin, code="KS-RT5")
+    _, ready = _approve_to_ready(
+        client, developer_username="dev1", cc_id=cc["id"], admin_token=admin
+    )
+
+    resp = client.post(f"/api/keys/{ready['id']}/retrieve", headers=_auth(admin))
     assert resp.status_code == 200
     assert resp.json()["bearer_token"].startswith("br-")
 

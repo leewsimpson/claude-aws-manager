@@ -139,7 +139,18 @@ def _provision_key(
         headers=_auth(admin_token),
     )
     assert approve_resp.status_code == 200, approve_resp.text
-    return approve_resp.json()["key"]
+    # Approval no longer reveals the token — the developer retrieves it themselves.
+    assert approve_resp.json()["key"] is None
+    ready = next(
+        k
+        for k in client.get("/api/keys", headers=_auth(dev_token)).json()
+        if k["cost_centre_id"] == cc_id and k["status"] == "ready"
+    )
+    retrieve_resp = client.post(
+        f"/api/keys/{ready['id']}/retrieve", headers=_auth(dev_token)
+    )
+    assert retrieve_resp.status_code == 200, retrieve_resp.text
+    return retrieve_resp.json()
 
 
 # ---------------------------------------------------------------------------

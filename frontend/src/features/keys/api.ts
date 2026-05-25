@@ -54,6 +54,20 @@ export function useRegenerateKey() {
   })
 }
 
+// First-time claim of a 'ready' key: issues the credential and reveals the
+// bearer token once (the approver never sees it).
+export function useRetrieveToken() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      api<ProvisionedKey>(`/keys/${id}/retrieve`, { method: 'POST', token }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: KEYS_KEY })
+    },
+  })
+}
+
 export function useUpdateKeyConstraints() {
   const { token } = useAuth()
   const queryClient = useQueryClient()

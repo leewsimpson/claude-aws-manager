@@ -64,6 +64,22 @@ class _KeyState:
 
 
 @dataclass
+class _IdentityState:
+    """An IAM identity (user + policy) without an issued credential yet.
+
+    Created at approval; promoted to a ``_KeyState`` when the developer issues a
+    credential. ``credential_id`` is set once issued (one credential per identity).
+    """
+
+    iam_username: str
+    cost_centre_code: str
+    allowed_models: list[str]
+    policy: dict
+    expires_at: datetime
+    credential_id: str | None = None
+
+
+@dataclass
 class _ProfileState:
     """In-memory representation of an inference profile."""
 
@@ -103,11 +119,71 @@ class MockAwsService(AwsService):
         )
         self._keys: dict[str, _KeyState] = {}
         self._key_by_username: dict[str, str] = {}
+        # IAM identities awaiting credential issuance (unclaimed 'ready' keys).
+        self._identities: dict[str, _IdentityState] = {}
         self._profiles: dict[str, _ProfileState] = {}
         # (cost_centre_code, model_id) -> ARN of the single active profile.
         self._profile_index: dict[tuple[str, str], str] = {}
 
     # -- keys -----------------------------------------------------------------
+
+    def create_key_identity(
+        self,
+        *,
+        iam_username: str,
+        cost_centre_code: str,
+        allowed_models: list[str],
+        expiry_days: int,
+    ) -> None:
+        if iam_username in self._key_by_username or iam_username in self._identities:
+            raise DuplicateKeyError(
+                f"IAM user {iam_username!r} already has a provisioned key"
+            )
+        self._identities[iam_username] = _IdentityState(
+            iam_username=iam_username,
+            cost_centre_code=cost_centre_code,
+            allowed_models=list(allowed_models),
+            policy=build_model_policy(allowed_models, account_id=self._account_id),
+            expires_at=self._clock() + timedelta(days=expiry_days),
+        )
+
+    def issue_credential(self, *, iam_username: str) -> ProvisionedKey:
+        identity = self._identities.get(iam_username)
+        if identity is None:
+            raise KeyNotFoundError(f"No identity for IAM user {iam_username!r}")
+        if identity.credential_id is not None:
+            raise DuplicateKeyError(
+                f"IAM user {iam_username!r} already has an issued credential"
+            )
+        now = self._clock()
+        credential_id = _new_credential_id()
+        bearer_token = _new_bearer_token()
+        # Models without a profile for this CC are simply absent — realistic: no
+        # CloudWatch attribution until a profile exists for that (CC, model).
+        model_profiles = {
+            model_id: self._profile_index[(identity.cost_centre_code, model_id)]
+            for model_id in identity.allowed_models
+            if (identity.cost_centre_code, model_id) in self._profile_index
+        }
+        self._keys[credential_id] = _KeyState(
+            credential_id=credential_id,
+            iam_username=iam_username,
+            cost_centre_code=identity.cost_centre_code,
+            allowed_models=list(identity.allowed_models),
+            policy=identity.policy,
+            expires_at=identity.expires_at,
+            model_profiles=model_profiles,
+        )
+        self._key_by_username[iam_username] = credential_id
+        identity.credential_id = credential_id
+        self._sim.register_key(
+            credential_id=credential_id,
+            iam_username=iam_username,
+            cost_centre_code=identity.cost_centre_code,
+            model_profiles=model_profiles,
+            provisioned_at=now,
+        )
+        return ProvisionedKey(credential_id=credential_id, bearer_token=bearer_token)
 
     def provision_key(
         self,
@@ -117,39 +193,24 @@ class MockAwsService(AwsService):
         allowed_models: list[str],
         expiry_days: int,
     ) -> ProvisionedKey:
-        if iam_username in self._key_by_username:
-            raise DuplicateKeyError(
-                f"IAM user {iam_username!r} already has a provisioned key"
-            )
-        now = self._clock()
-        credential_id = _new_credential_id()
-        bearer_token = _new_bearer_token()
-        policy = build_model_policy(allowed_models, account_id=self._account_id)
-        # Models without a profile for this CC are simply absent — realistic: no
-        # CloudWatch attribution until a profile exists for that (CC, model).
-        model_profiles = {
-            model_id: self._profile_index[(cost_centre_code, model_id)]
-            for model_id in allowed_models
-            if (cost_centre_code, model_id) in self._profile_index
-        }
-        self._keys[credential_id] = _KeyState(
-            credential_id=credential_id,
+        """Convenience primitive: create the identity then issue the credential."""
+        self.create_key_identity(
             iam_username=iam_username,
             cost_centre_code=cost_centre_code,
-            allowed_models=list(allowed_models),
-            policy=policy,
-            expires_at=now + timedelta(days=expiry_days),
-            model_profiles=model_profiles,
+            allowed_models=allowed_models,
+            expiry_days=expiry_days,
         )
-        self._key_by_username[iam_username] = credential_id
-        self._sim.register_key(
-            credential_id=credential_id,
-            iam_username=iam_username,
-            cost_centre_code=cost_centre_code,
-            model_profiles=model_profiles,
-            provisioned_at=now,
-        )
-        return ProvisionedKey(credential_id=credential_id, bearer_token=bearer_token)
+        return self.issue_credential(iam_username=iam_username)
+
+    def delete_key_identity(self, *, iam_username: str) -> None:
+        identity = self._identities.pop(iam_username, None)
+        if identity is None:
+            raise KeyNotFoundError(f"No identity for IAM user {iam_username!r}")
+        # Defensive: if a credential had been issued, tear it down too.
+        if identity.credential_id is not None:
+            self._keys.pop(identity.credential_id, None)
+            self._key_by_username.pop(iam_username, None)
+            self._sim.remove_key(credential_id=identity.credential_id)
 
     def revoke_key(self, *, iam_username: str, credential_id: str) -> None:
         key = self._keys.get(credential_id)
@@ -159,6 +220,7 @@ class MockAwsService(AwsService):
             )
         del self._keys[credential_id]
         self._key_by_username.pop(iam_username, None)
+        self._identities.pop(iam_username, None)
         self._sim.remove_key(credential_id=credential_id)
 
     def disable_key(self, *, credential_id: str) -> None:
@@ -301,6 +363,27 @@ class MockAwsService(AwsService):
             self._sim.set_key_state(
                 credential_id=credential_id, active=False, at=provisioned_at
             )
+
+    def rehydrate_identity(
+        self,
+        *,
+        iam_username: str,
+        cost_centre_code: str,
+        allowed_models: list[str],
+    ) -> None:
+        """Repopulate an unclaimed identity from the DB without minting ids.
+
+        Skip silently if the username is already known (idempotent).
+        """
+        if iam_username in self._identities or iam_username in self._key_by_username:
+            return
+        self._identities[iam_username] = _IdentityState(
+            iam_username=iam_username,
+            cost_centre_code=cost_centre_code,
+            allowed_models=list(allowed_models),
+            policy=build_model_policy(allowed_models, account_id=self._account_id),
+            expires_at=self._clock() + timedelta(days=90),
+        )
 
     # -- internals ------------------------------------------------------------
 

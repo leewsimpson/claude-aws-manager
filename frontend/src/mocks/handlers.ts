@@ -183,31 +183,38 @@ export function seedPendingKeyRequest(overrides?: Partial<KeyRequest>): KeyReque
   return req
 }
 
-function makeProvisionedKey(
-  request: KeyRequest,
-  allowedModels: string[],
-  expiryDays?: number,
-): ProvisionedKey {
-  return {
-    id: `key-${nextKeyRequestId}`,
+/** Provision a 'ready' key into the keys store (approval no longer reveals a
+ *  token — the developer retrieves it). Returns the created key. */
+function makeReadyKey(request: KeyRequest, allowedModels: string[]): Key {
+  const now = new Date().toISOString()
+  const key: Key = {
+    id: `key-ready-${nextKeyId++}`,
+    developer_id: request.developer_id,
+    developer_username: request.developer_username,
+    developer_display_name: request.developer_display_name,
     cost_centre_id: request.cost_centre_id,
     cost_centre_code: request.cost_centre_code,
+    cost_centre_name: request.cost_centre_name,
     iam_username: `claude-${request.developer_username}-${request.cost_centre_code.toLowerCase()}`,
-    status: 'active',
+    status: 'ready',
     allowed_models: allowedModels,
     rolling_limit: null,
     rolling_period_days: null,
     lifetime_budget: null,
-    expires_at: expiryDays
-      ? new Date(Date.now() + expiryDays * 86400000).toISOString()
-      : null,
-    bearer_token: `mock-bearer-token-${request.id}`,
+    lifetime_spend: 0,
+    rolling_spend: 0,
+    expires_at: null,
+    token_retrieved_at: null,
+    created_at: now,
+    revoked_at: null,
     inference_profiles: allowedModels.map((m) => ({
       model_id: m,
       profile_arn: `arn:aws:bedrock:ap-southeast-2:123456789:inference-profile/${request.cost_centre_code.toLowerCase()}-${m.replace(/\./g, '-')}`,
       profile_name: `${request.cost_centre_code}-${m}`,
     })),
   }
+  keys = [...keys, key]
+  return key
 }
 
 // ---- Keys store ----
@@ -249,6 +256,7 @@ export function seedKey(overrides?: Partial<Key>): Key {
     lifetime_spend: 0,
     rolling_spend: 0,
     expires_at: null,
+    token_retrieved_at: null,
     created_at: now,
     revoked_at: null,
     inference_profiles: defaultModels.map((m) => ({
@@ -514,10 +522,12 @@ export const handlers = [
     }
     keyRequests = [...keyRequests, newRequest]
 
-    const result: KeyRequestResult = {
-      request: newRequest,
-      key: autoApprove ? makeProvisionedKey(newRequest, ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5']) : null,
+    // Auto-approval provisions a 'ready' key but never returns a token — the
+    // requester retrieves it from the Keys page like any developer.
+    if (autoApprove) {
+      makeReadyKey(newRequest, ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5'])
     }
+    const result: KeyRequestResult = { request: newRequest, key: null }
     return HttpResponse.json(result, { status: 201 })
   }),
 
@@ -550,8 +560,9 @@ export const handlers = [
     }
     req.updated_at = now
 
-    const key = makeProvisionedKey(req, allowedModels, body.expiry_days)
-    const result: KeyRequestResult = { request: req, key }
+    // Provision a 'ready' key; the approver never receives a token.
+    makeReadyKey(req, allowedModels)
+    const result: KeyRequestResult = { request: req, key: null }
     return HttpResponse.json(result)
   }),
 
@@ -636,6 +647,38 @@ export const handlers = [
       lifetime_budget: key.lifetime_budget,
       expires_at: key.expires_at,
       bearer_token: `mock-regen-bearer-${key.id}`,
+      inference_profiles: key.inference_profiles,
+    }
+    return HttpResponse.json(provisioned)
+  }),
+
+  http.post('/api/keys/:id/retrieve', ({ request, params }) => {
+    if (!isAuthed(request)) return unauthorised()
+    const key = keys.find((k) => k.id === params.id)
+    if (!key) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const userId = getRequestingUserId(request)
+    // Only the developer-owner (or admin) can claim the token.
+    if (key.developer_id !== userId && !isAdmin(request)) return forbidden()
+    if (key.status !== 'ready') {
+      return HttpResponse.json(
+        { detail: 'Key is not awaiting retrieval' },
+        { status: 409 },
+      )
+    }
+    key.status = 'active'
+    key.token_retrieved_at = new Date().toISOString()
+    const provisioned: ProvisionedKey = {
+      id: key.id,
+      cost_centre_id: key.cost_centre_id,
+      cost_centre_code: key.cost_centre_code,
+      iam_username: key.iam_username,
+      status: 'active',
+      allowed_models: key.allowed_models,
+      rolling_limit: key.rolling_limit,
+      rolling_period_days: key.rolling_period_days,
+      lifetime_budget: key.lifetime_budget,
+      expires_at: key.expires_at,
+      bearer_token: `mock-retrieve-bearer-${key.id}`,
       inference_profiles: key.inference_profiles,
     }
     return HttpResponse.json(provisioned)

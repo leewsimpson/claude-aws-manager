@@ -490,6 +490,12 @@
   border-color: var(--warn-line);
 }
 
+.badge--ready {
+  background: var(--accent-glow);
+  color: var(--accent);
+  border-color: var(--accent-strong);
+}
+
 .badge--rejected {
   background: var(--danger-bg);
   color: var(--danger);
@@ -549,6 +555,19 @@
   border-color: var(--danger);
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+.btn--primary {
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-strong) 100%);
+  border-color: var(--accent-strong);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.btn--primary:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+  color: var(--accent-ink);
+  box-shadow: 0 6px 20px -8px var(--accent-strong);
 }
 
 .btn:disabled {
@@ -983,6 +1002,36 @@
   font-size: 0.8rem;
   font-weight: 400;
   color: var(--text-muted);
+}
+
+/* "Retrieve your token" notification banner above the My-keys list */
+.key-card__ready-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.5rem 0 1rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--accent-strong);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+  background: var(--accent-glow);
+  font-size: 0.88rem;
+}
+
+.key-card__ready-banner span {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* Per-card note shown on an unclaimed ('ready') key */
+.key-card__ready-note {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--accent-strong);
+  border-radius: var(--r-sm);
+  background: var(--accent-glow);
+  color: var(--text);
+  font-size: 0.84rem;
 }
 
 /* Collapsible usage snapshot list */

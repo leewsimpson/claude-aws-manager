@@ -87,6 +87,19 @@ def rehydrate_aws_from_db(db: Session, aws: AwsService) -> None:
             active=(key.status == "active"),
         )
 
+    # 3. Rehydrate identities for 'ready' keys (approved, token not yet retrieved)
+    #    so the developer can still issue the credential after a restart.
+    ready_keys = db.scalars(select(Key).where(Key.status == "ready")).all()
+    for key in ready_keys:
+        cc = db.get(CostCentre, key.cost_centre_id)
+        if cc is None:
+            continue
+        aws.rehydrate_identity(
+            iam_username=key.iam_username,
+            cost_centre_code=cc.code,
+            allowed_models=list(key.allowed_models or []),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Poll cycle

@@ -293,7 +293,7 @@ Approval workflow record. Created when a developer requests a key; updated when 
 
 ### `keys`
 
-Active Bedrock API Key metadata. One row per provisioned key. Bearer tokens are **never stored** — they are displayed once at creation/regeneration.
+Active Bedrock API Key metadata. One row per provisioned key. Bearer tokens are **never stored** — they are displayed once when the developer retrieves (claims) the key, or on regeneration. Approval provisions the IAM identity only and leaves the key in the `ready` state (`credential_id = NULL`); the credential is issued — and the token revealed — when the **developer** calls `POST /keys/{id}/retrieve`, so the approver never sees it.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
@@ -302,14 +302,15 @@ Active Bedrock API Key metadata. One row per provisioned key. Bearer tokens are 
 | `cost_centre_id` | `UUID` | FK → `cost_centres.id`, NOT NULL | Cost centre this key is billed to |
 | `key_request_id` | `UUID` | FK → `key_requests.id`, UNIQUE, NOT NULL | The approval that produced this key |
 | `iam_username` | `VARCHAR(255)` | UNIQUE, NOT NULL | AWS IAM username (format: `claude-{username}-{cc_code}`) |
-| `credential_id` | `VARCHAR(255)` | UNIQUE, NOT NULL | AWS `ServiceSpecificCredentialId` for lifecycle operations |
-| `status` | `VARCHAR(20)` | NOT NULL, default `'active'` | `active`, `stopped`, `expired`, `revoked` |
+| `credential_id` | `VARCHAR(255)` | UNIQUE, NULL | AWS `ServiceSpecificCredentialId` for lifecycle operations. NULL while `ready` (issued on retrieval). |
+| `status` | `VARCHAR(20)` | NOT NULL, default `'active'` | `ready` (approved, token not yet retrieved), `active`, `stopped`, `expired`, `revoked` |
 | `allowed_models` | `VARCHAR(100)[]` | NOT NULL | Models this key can access (e.g., `anthropic.claude-sonnet-4-6`) |
 | `rolling_limit` | `DECIMAL(12,2)` | NULL | Cost limit (dollars) over the rolling period. NULL = no rolling limit. |
 | `rolling_period_days` | `INTEGER` | NULL | Number of days for the rolling window |
 | `lifetime_budget` | `DECIMAL(12,2)` | NULL | Total lifetime spend cap (dollars). NULL = no lifetime cap. |
 | `lifetime_spend` | `DECIMAL(12,2)` | NOT NULL, default `0.00` | Accumulated total spend (updated by background scheduler) |
 | `expires_at` | `TIMESTAMPTZ` | NULL | Key expiration timestamp. NULL = no expiry. |
+| `token_retrieved_at` | `TIMESTAMPTZ` | NULL | When the developer first retrieved (claimed) the token. NULL while `ready`. |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL, default `NOW()` | |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL, default `NOW()` | |
 | `revoked_at` | `TIMESTAMPTZ` | NULL | When the key was revoked (NULL if still active/stopped/expired) |
@@ -318,9 +319,11 @@ Active Bedrock API Key metadata. One row per provisioned key. Bearer tokens are 
 - `idx_keys_developer` — on `developer_id`
 - `idx_keys_cost_centre` — on `cost_centre_id`
 - `idx_keys_status` — on `status`
-- `uq_keys_active_dev_cc` — UNIQUE on `(developer_id, cost_centre_id)` WHERE `status IN ('active', 'stopped')` (enforces one active key per developer per cost centre)
+- `uq_keys_active_dev_cc` — UNIQUE on `(developer_id, cost_centre_id)` WHERE `status IN ('active', 'stopped', 'ready')` (one live key per developer per cost centre — a `ready` key reserves the slot)
 
 **Status transitions:**
+- `ready` → `active` (developer retrieves the token; credential issued — `POST /keys/{id}/retrieve`)
+- `ready` → `revoked` (developer/CCO/Admin cancels before retrieval; bare identity torn down)
 - `active` → `stopped` (rolling/lifetime limit or CC budget exceeded)
 - `stopped` → `active` (spend falls outside rolling window, or CC budget increased)
 - `active` → `expired` (past `expires_at`)

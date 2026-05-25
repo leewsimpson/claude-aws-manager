@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useCostCentres } from '../features/costCentres/api'
-import { useKeys, useRevokeKey, useRegenerateKey, useUpdateKeyConstraints } from '../features/keys/api'
+import { useKeys, useRevokeKey, useRegenerateKey, useRetrieveToken, useUpdateKeyConstraints } from '../features/keys/api'
 import type { Key, KeyStatus, UpdateKeyConstraintsInput } from '../features/keys/types'
 import type { ProvisionedKey } from '../features/keyRequests/types'
 import { TokenReveal } from '../components/TokenReveal'
@@ -56,18 +56,19 @@ export function KeysPage() {
   const isReviewer = hasRole('cco') || hasRole('admin')
   const isDeveloper = hasRole('developer') || (!isReviewer)
 
-  // Lifted regenerated key state — persists across list invalidation
-  const [regeneratedKey, setRegeneratedKey] = useState<ProvisionedKey | null>(null)
+  // Lifted revealed-token state — set after a retrieve or regenerate, persists
+  // across list invalidation so the one-time TokenReveal isn't lost.
+  const [revealedKey, setRevealedKey] = useState<ProvisionedKey | null>(null)
 
-  if (regeneratedKey) {
+  if (revealedKey) {
     return (
       <section className="panel panel--wide">
         <div className="panel__header">
           <h1>Keys</h1>
         </div>
         <TokenReveal
-          provisionedKey={regeneratedKey}
-          onDismiss={() => setRegeneratedKey(null)}
+          provisionedKey={revealedKey}
+          onDismiss={() => setRevealedKey(null)}
         />
       </section>
     )
@@ -83,7 +84,7 @@ export function KeysPage() {
       {(isDeveloper || hasRole('developer')) && user && (
         <MyKeysSection
           userId={String(user.id)}
-          onRegenerated={setRegeneratedKey}
+          onReveal={setRevealedKey}
         />
       )}
 
@@ -99,16 +100,31 @@ export function KeysPage() {
 
 function MyKeysSection({
   userId,
-  onRegenerated,
+  onReveal,
 }: {
   userId: string
-  onRegenerated: (key: ProvisionedKey) => void
+  onReveal: (key: ProvisionedKey) => void
 }) {
   const { data: keys, isLoading, isError } = useKeys({ developer_id: userId })
+
+  const readyCount = (keys ?? []).filter((k) => k.status === 'ready').length
 
   return (
     <>
       <h2>My keys</h2>
+      {/* In-app notification: an approved key is waiting to be claimed. */}
+      {readyCount > 0 && (
+        <div className="key-card__ready-banner" role="status">
+          <strong>
+            {readyCount === 1
+              ? 'A key request was approved.'
+              : `${readyCount} key requests were approved.`}
+          </strong>
+          <span>
+            Retrieve your token below to activate {readyCount === 1 ? 'it' : 'them'} — it is shown once.
+          </span>
+        </div>
+      )}
       {isLoading && (
         <p className="status status--loading">Loading keys…</p>
       )}
@@ -124,7 +140,7 @@ function MyKeysSection({
         <DeveloperKeyCard
           key={key.id}
           keyData={key}
-          onRegenerated={onRegenerated}
+          onReveal={onReveal}
         />
       ))}
     </>
@@ -133,17 +149,19 @@ function MyKeysSection({
 
 function DeveloperKeyCard({
   keyData,
-  onRegenerated,
+  onReveal,
 }: {
   keyData: Key
-  onRegenerated: (key: ProvisionedKey) => void
+  onReveal: (key: ProvisionedKey) => void
 }) {
   const [panel, setPanel] = useState<'none' | 'revoke' | 'setup'>('none')
   const [usageOpen, setUsageOpen] = useState(false)
   const revoke = useRevokeKey()
   const regenerate = useRegenerateKey()
+  const retrieve = useRetrieveToken()
   const [revokeError, setRevokeError] = useState<string | null>(null)
   const [regenError, setRegenError] = useState<string | null>(null)
+  const [retrieveError, setRetrieveError] = useState<string | null>(null)
 
   const modelOverrides: Record<string, string> = {}
   for (const profile of keyData.inference_profiles) {
@@ -165,12 +183,23 @@ function DeveloperKeyCard({
     setRegenError(null)
     try {
       const provisioned = await regenerate.mutateAsync(keyData.id)
-      onRegenerated(provisioned)
+      onReveal(provisioned)
     } catch {
       setRegenError('Unable to regenerate key. Please try again.')
     }
   }
 
+  async function handleRetrieve() {
+    setRetrieveError(null)
+    try {
+      const provisioned = await retrieve.mutateAsync(keyData.id)
+      onReveal(provisioned)
+    } catch {
+      setRetrieveError('Unable to retrieve token. Please try again.')
+    }
+  }
+
+  const isReady = keyData.status === 'ready'
   const canAct = keyData.status === 'active' || keyData.status === 'stopped'
   const isStopped = keyData.status === 'stopped'
 
@@ -186,6 +215,25 @@ function DeveloperKeyCard({
           </span>
           <span className={`badge badge--${keyData.status}`}>{keyData.status}</span>
         </div>
+        {isReady && (
+          <div className="key-card__actions">
+            <button
+              type="button"
+              className="btn btn--small btn--primary"
+              onClick={() => void handleRetrieve()}
+              disabled={retrieve.isPending}
+            >
+              {retrieve.isPending ? 'Retrieving…' : 'Retrieve token'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--small btn--danger"
+              onClick={() => setPanel(panel === 'revoke' ? 'none' : 'revoke')}
+            >
+              {panel === 'revoke' ? 'Close' : 'Cancel key'}
+            </button>
+          </div>
+        )}
         {canAct && (
           <div className="key-card__actions">
             <button
@@ -214,6 +262,14 @@ function DeveloperKeyCard({
         )}
       </div>
 
+      {/* Ready key banner — approved, awaiting first-time token retrieval */}
+      {isReady && (
+        <div className="key-card__ready-note" role="status">
+          Approved and ready. Retrieve your bearer token to activate this key — it is
+          shown once and never stored, so keep it somewhere safe.
+        </div>
+      )}
+
       {/* Stopped key banner */}
       {isStopped && (
         <div className="key-card__stopped-banner" role="alert">
@@ -223,6 +279,12 @@ function DeveloperKeyCard({
             when rolling spend falls below the limit, or when a budget is increased.
           </p>
         </div>
+      )}
+
+      {retrieveError && (
+        <p className="status status--error" role="alert">
+          {retrieveError}
+        </p>
       )}
 
       <div className="key-card__meta">
@@ -235,7 +297,9 @@ function DeveloperKeyCard({
           </span>
         </div>
 
-        {/* Rolling spend / limit */}
+        {/* Rolling + lifetime spend — hidden until the key is activated */}
+        {!isReady && (
+        <>
         <div className="key-card__meta-row">
           <span className="key-card__label">Rolling spend</span>
           {hasRollingBudget ? (
@@ -269,6 +333,8 @@ function DeveloperKeyCard({
             <span className="key-card__value">{formatCurrency(keyData.lifetime_spend)} (no budget)</span>
           )}
         </div>
+        </>
+        )}
 
         <div className="key-card__meta-row">
           <span className="key-card__label">Expires</span>
@@ -280,20 +346,22 @@ function DeveloperKeyCard({
         </div>
       </div>
 
-      {/* Recent usage (collapsible) */}
-      <div className="key-card__usage">
-        <button
-          type="button"
-          className="key-card__usage-toggle"
-          onClick={() => setUsageOpen((v) => !v)}
-          aria-expanded={usageOpen}
-        >
-          {usageOpen ? '▾' : '▸'} Recent usage
-        </button>
-        {usageOpen && (
-          <KeyUsagePanel keyId={keyData.id} />
-        )}
-      </div>
+      {/* Recent usage (collapsible) — only once the key is active */}
+      {!isReady && (
+        <div className="key-card__usage">
+          <button
+            type="button"
+            className="key-card__usage-toggle"
+            onClick={() => setUsageOpen((v) => !v)}
+            aria-expanded={usageOpen}
+          >
+            {usageOpen ? '▾' : '▸'} Recent usage
+          </button>
+          {usageOpen && (
+            <KeyUsagePanel keyId={keyData.id} />
+          )}
+        </div>
+      )}
 
       {regenError && (
         <p className="status status--error" role="alert">
@@ -431,6 +499,7 @@ function ReviewerKeysSection() {
             onChange={(e) => setStatusFilter(e.target.value as KeyStatus | '')}
           >
             <option value="">All statuses</option>
+            <option value="ready">Ready</option>
             <option value="active">Active</option>
             <option value="stopped">Stopped</option>
             <option value="revoked">Revoked</option>
@@ -506,7 +575,9 @@ function ReviewerKeysSection() {
 function ReviewerKeyRow({ keyData }: { keyData: Key }) {
   const [panel, setPanel] = useState<'none' | 'revoke' | 'edit'>('none')
 
-  const canAct = keyData.status !== 'revoked'
+  const canRevoke = keyData.status !== 'revoked'
+  // Constraints can only be edited once the credential exists (active/stopped).
+  const canEdit = keyData.status === 'active' || keyData.status === 'stopped'
 
   const hasRollingBudget = keyData.rolling_limit !== null
   const hasLifetimeBudget = keyData.lifetime_budget !== null
@@ -549,23 +620,23 @@ function ReviewerKeyRow({ keyData }: { keyData: Key }) {
         </td>
         <td>{formatDate(keyData.expires_at)}</td>
         <td className="table__actions">
-          {canAct && (
-            <>
-              <button
-                type="button"
-                className="btn btn--small"
-                onClick={() => setPanel(panel === 'edit' ? 'none' : 'edit')}
-              >
-                {panel === 'edit' ? 'Close' : 'Edit constraints'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--small btn--danger"
-                onClick={() => setPanel(panel === 'revoke' ? 'none' : 'revoke')}
-              >
-                {panel === 'revoke' ? 'Cancel' : 'Revoke'}
-              </button>
-            </>
+          {canEdit && (
+            <button
+              type="button"
+              className="btn btn--small"
+              onClick={() => setPanel(panel === 'edit' ? 'none' : 'edit')}
+            >
+              {panel === 'edit' ? 'Close' : 'Edit constraints'}
+            </button>
+          )}
+          {canRevoke && (
+            <button
+              type="button"
+              className="btn btn--small btn--danger"
+              onClick={() => setPanel(panel === 'revoke' ? 'none' : 'revoke')}
+            >
+              {panel === 'revoke' ? 'Cancel' : 'Revoke'}
+            </button>
           )}
         </td>
       </tr>

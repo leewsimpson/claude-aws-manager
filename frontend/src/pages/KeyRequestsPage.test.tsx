@@ -71,9 +71,10 @@ describe('KeyRequestsPage — developer', () => {
     expect(await screen.findByText('pending')).toBeInTheDocument()
   })
 
-  it('shows TokenReveal with bearer token on auto-approval', async () => {
+  it('directs a CCO to the Keys page (no token) on auto-approval', async () => {
     // The seed CC cc-1 has ccowner1 as an owner, so a CCO submitting for cc-1
-    // is auto-approved in the mock handler.
+    // is auto-approved in the mock handler. The token is NOT revealed here —
+    // the CCO retrieves it from the Keys page like any developer.
     const user = userEvent.setup()
     renderPage(CCO_TOKEN)
 
@@ -86,15 +87,14 @@ describe('KeyRequestsPage — developer', () => {
     )
     await user.click(screen.getByRole('button', { name: /submit request/i }))
 
-    // TokenReveal should appear with the bearer token warning
+    // A confirmation directs the user to the Keys page — and no token is shown.
     expect(
-      await screen.findByText(/store this token now/i),
+      await screen.findByText(/keys page to retrieve your token/i),
     ).toBeInTheDocument()
-
-    // Copy button should be present
+    expect(screen.queryByText(/store this token now/i)).not.toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: /copy bearer token/i }),
-    ).toBeInTheDocument()
+      screen.queryByRole('button', { name: /copy bearer token/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('shows conflict error when submitting a duplicate request', async () => {
@@ -138,7 +138,7 @@ describe('KeyRequestsPage — reviewer (admin)', () => {
     expect(screen.getByRole('button', { name: /^reject$/i })).toBeInTheDocument()
   })
 
-  it('admin can approve a request and sees TokenReveal with env-var text and bearer token', async () => {
+  it('admin approval shows a confirmation and never reveals a token', async () => {
     const user = userEvent.setup()
     seedPendingKeyRequest()
     renderPage(ADMIN_TOKEN)
@@ -153,15 +153,15 @@ describe('KeyRequestsPage — reviewer (admin)', () => {
     // Now the row button says "Close"; only the form submit says "Approve"
     await user.click(screen.getByRole('button', { name: /^approve$/i }))
 
-    // TokenReveal should appear
-    expect(await screen.findByText(/store this token now/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /copy bearer token/i })).toBeInTheDocument()
-
-    // The env-var line should be shown (bearer token embedded in the env var text)
-    expect(screen.getByText(/AWS_BEARER_TOKEN_BEDROCK=/i)).toBeInTheDocument()
-
-    // The copy env-var button should be present
-    expect(screen.getByRole('button', { name: /copy aws_bearer_token_bedrock/i })).toBeInTheDocument()
+    // A confirmation appears stating the developer will retrieve the key…
+    expect(
+      await screen.findByText(/will retrieve their key from the Keys page/i),
+    ).toBeInTheDocument()
+    // …and the approver is NEVER shown the token.
+    expect(screen.queryByText(/store this token now/i)).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /copy bearer token/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('admin can reject a request and the POST body carries rejection_reason', async () => {

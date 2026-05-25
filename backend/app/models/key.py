@@ -41,8 +41,11 @@ class Key(Base, TimestampMixin):
     iam_username: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False
     )
-    credential_id: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False
+    # NULL while the key is 'ready' (identity provisioned, credential not yet issued).
+    # Set when the developer retrieves the token. Postgres allows multiple NULLs
+    # under the unique constraint.
+    credential_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'active'")
@@ -61,6 +64,10 @@ class Key(Base, TimestampMixin):
     expires_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    # When the developer first retrieved (claimed) the bearer token. NULL while 'ready'.
+    token_retrieved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -76,6 +83,6 @@ class Key(Base, TimestampMixin):
             "developer_id",
             "cost_centre_id",
             unique=True,
-            postgresql_where=text("status IN ('active', 'stopped')"),
+            postgresql_where=text("status IN ('active', 'stopped', 'ready')"),
         ),
     )

@@ -1,6 +1,8 @@
 // Frozen API contract types for key management (Phase 6).
 
-export type KeyStatus = 'active' | 'stopped' | 'revoked' | 'expired'
+// 'ready' = approved & provisioned, but the bearer token has not yet been
+// retrieved (claimed) by the developer.
+export type KeyStatus = 'ready' | 'active' | 'stopped' | 'revoked' | 'expired'
 
 export interface InferenceProfileRef {
   model_id: string
@@ -25,6 +27,7 @@ export interface Key {
   lifetime_spend: number
   rolling_spend: number
   expires_at: string | null
+  token_retrieved_at: string | null
   created_at: string
   revoked_at: string | null
   inference_profiles: InferenceProfileRef[]

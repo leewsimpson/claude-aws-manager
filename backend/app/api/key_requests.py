@@ -31,12 +31,10 @@ from app.models.key_request import KeyRequest
 from app.models.user import User
 from app.schemas.key_request import (
     ApprovalConstraints,
-    InferenceProfileRefOut,
     KeyRequestCreate,
     KeyRequestOut,
     KeyRequestReject,
     KeyRequestResult,
-    ProvisionedKeyOut,
 )
 from app.services.aws import AwsService, AwsServiceError, DuplicateKeyError, get_aws_service
 from app.services.provisioning import (
@@ -199,30 +197,6 @@ def _serialise_request(db: Session, kr: KeyRequest) -> KeyRequestOut:
     )
 
 
-def _serialise_key(
-    db: Session,
-    key: Key,
-    bearer_token: str,
-    profile_refs: list[InferenceProfileRefOut],
-) -> ProvisionedKeyOut:
-    """Build ProvisionedKeyOut with the one-time bearer token."""
-    cc = db.get(CostCentre, key.cost_centre_id)
-    return ProvisionedKeyOut(
-        id=key.id,
-        cost_centre_id=key.cost_centre_id,
-        cost_centre_code=cc.code,
-        iam_username=key.iam_username,
-        status=key.status,
-        allowed_models=list(key.allowed_models),
-        rolling_limit=float(key.rolling_limit) if key.rolling_limit is not None else None,
-        rolling_period_days=key.rolling_period_days,
-        lifetime_budget=float(key.lifetime_budget) if key.lifetime_budget is not None else None,
-        expires_at=key.expires_at,
-        bearer_token=bearer_token,
-        inference_profiles=profile_refs,
-    )
-
-
 def _get_global_allowed_models(db: Session) -> list[str]:
     row = db.get(GlobalSetting, "allowed_models")
     if row is None:
@@ -272,13 +246,13 @@ def _provision_and_commit(
     try:
         db.commit()
     except IntegrityError as exc:
-        # One-active-key race vs. the partial unique index: the AWS key/profiles were
-        # created but the DB won't commit, so compensate before get_db rolls back.
+        # One-active-key race vs. the partial unique index: the AWS identity/profiles
+        # were created but the DB won't commit, so compensate before get_db rolls back.
         compensate_aws(
             aws,
             created_profile_arns=outcome.created_profile_arns,
-            credential_id=outcome.credential_id,
             iam_username=outcome.iam_username,
+            identity_created=outcome.identity_created,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -321,7 +295,7 @@ def create_key_request(
         select(Key).where(
             Key.developer_id == actor.id,
             Key.cost_centre_id == cc.id,
-            Key.status.in_(["active", "stopped"]),
+            Key.status.in_(["active", "stopped", "ready"]),
         )
     )
     if existing_key is not None:
@@ -393,7 +367,7 @@ def create_key_request(
             ip_address=_client_ip(request),
         )
 
-        outcome = _provision_and_commit(
+        _provision_and_commit(
             db,
             aws,
             kr=kr,
@@ -401,11 +375,11 @@ def create_key_request(
             actor=actor,
             ip_address=_client_ip(request),
         )
+        # The key is provisioned in the 'ready' state; the requester (acting as the
+        # developer) retrieves the bearer token from the Keys page. Never returned here.
         return KeyRequestResult(
             request=_serialise_request(db, kr),
-            key=_serialise_key(
-                db, outcome.key, outcome.bearer_token, outcome.profile_refs
-            ),
+            key=None,
         )
 
     db.commit()
@@ -495,8 +469,9 @@ def approve_key_request(
 ) -> KeyRequestResult:
     """Approve a pending key request (admin or CCO of the target CC).
 
-    Resolves constraints (applying any overrides), provisions inference
-    profiles and a key, marks the request approved.
+    Resolves constraints (applying any overrides), provisions inference profiles and
+    the IAM identity, and marks the request approved. The key lands in the ``ready``
+    state and **no bearer token is returned** — the developer retrieves it themselves.
     """
     kr = db.get(KeyRequest, request_id)
     if kr is None:
@@ -524,7 +499,7 @@ def approve_key_request(
         select(Key).where(
             Key.developer_id == kr.developer_id,
             Key.cost_centre_id == kr.cost_centre_id,
-            Key.status.in_(["active", "stopped"]),
+            Key.status.in_(["active", "stopped", "ready"]),
         )
     )
     if existing_key is not None:
@@ -556,7 +531,7 @@ def approve_key_request(
         ip_address=_client_ip(request),
     )
 
-    outcome = _provision_and_commit(
+    _provision_and_commit(
         db,
         aws,
         kr=kr,
@@ -565,11 +540,12 @@ def approve_key_request(
         ip_address=_client_ip(request),
     )
 
+    # The key is provisioned in the 'ready' state with NO bearer token in the
+    # response — the approver must never see it. The developer retrieves the token
+    # themselves from the Keys page (POST /keys/{id}/retrieve).
     return KeyRequestResult(
         request=_serialise_request(db, kr),
-        key=_serialise_key(
-            db, outcome.key, outcome.bearer_token, outcome.profile_refs
-        ),
+        key=None,
     )
 
 

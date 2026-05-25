@@ -103,6 +103,34 @@ describe('KeysPage — developer', () => {
     expect(screen.getAllByText(/mock-regen-bearer-/i).length).toBeGreaterThan(0)
   })
 
+  it('shows a "ready" key with a retrieve banner and no token until retrieved', async () => {
+    seedKey({ status: 'ready', token_retrieved_at: null })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    // Notification banner + ready badge, but no token yet.
+    expect(screen.getByText(/a key request was approved/i)).toBeInTheDocument()
+    expect(screen.getByText('ready')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /retrieve token/i })).toBeInTheDocument()
+    expect(screen.queryByText(/store this token now/i)).not.toBeInTheDocument()
+  })
+
+  it('retrieves the token for a ready key and shows TokenReveal once', async () => {
+    const user = userEvent.setup()
+    seedKey({ status: 'ready', token_retrieved_at: null })
+    renderPage(TEST_TOKEN)
+
+    await screen.findByText(/ENG — Engineering/i)
+
+    await user.click(screen.getByRole('button', { name: /retrieve token/i }))
+
+    // TokenReveal appears with the one-time bearer token.
+    expect(await screen.findByText(/store this token now/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /copy bearer token/i })).toBeInTheDocument()
+    expect(screen.getAllByText(/mock-retrieve-bearer-/i).length).toBeGreaterThan(0)
+  })
+
   it('shows setup instructions panel with env var name and modelOverrides', async () => {
     const user = userEvent.setup()
     seedKey({ status: 'active' })

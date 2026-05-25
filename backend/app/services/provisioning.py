@@ -37,30 +37,40 @@ class ProvisionOutcome:
     """Result of a successful provisioning, plus handles for compensation."""
 
     key: Key
-    bearer_token: str
     profile_refs: list[InferenceProfileRefOut]
     # AWS side-effects this call created — used to compensate on a later commit failure.
     created_profile_arns: list[str] = field(default_factory=list)
-    credential_id: str | None = None
     iam_username: str | None = None
+    # True once the IAM identity was created (so compensation deletes it). The
+    # credential is NOT issued here — the developer claims it on retrieval.
+    identity_created: bool = False
 
 
 def compensate_aws(
     aws: AwsService,
     *,
     created_profile_arns: list[str],
-    credential_id: str | None,
-    iam_username: str | None,
+    iam_username: str | None = None,
+    credential_id: str | None = None,
+    identity_created: bool = False,
 ) -> None:
     """Best-effort undo of AWS side-effects when the DB transaction is rolled back.
 
     Swallows :class:`AwsServiceError` — compensation is opportunistic; the goal is
     to avoid orphaned AWS state, not to guarantee it (a residual orphan is far less
     harmful than a hard failure masking the original error).
+
+    Tears down (in order): an issued credential (post-claim), an unclaimed identity
+    (post-approval), then any freshly created inference profiles.
     """
     if credential_id is not None and iam_username is not None:
         try:
             aws.revoke_key(iam_username=iam_username, credential_id=credential_id)
+        except AwsServiceError:
+            pass
+    elif identity_created and iam_username is not None:
+        try:
+            aws.delete_key_identity(iam_username=iam_username)
         except AwsServiceError:
             pass
     for arn in created_profile_arns:
@@ -79,13 +89,17 @@ def provision_for_request(
     actor: User,
     ip_address: str | None,
 ) -> ProvisionOutcome:
-    """Provision an inference profile (per model) and a key for an approved request.
+    """Provision an inference profile (per model) and the IAM identity for an approved request.
+
+    The bearer token is deliberately **not** minted here — the approver must never see
+    it. The key lands in the ``ready`` state with ``credential_id = NULL``; the developer
+    later issues the credential via ``POST /keys/{id}/retrieve``.
 
     Steps (in order):
     1. For each allowed model, look up or create the InferenceProfile row.
     2. Build the IAM username.
-    3. Call aws.provision_key.
-    4. Persist a Key row.
+    3. Call aws.create_key_identity (IAM user + policy, no credential).
+    4. Persist a 'ready' Key row (credential_id NULL).
     5. Write a key.provisioned audit entry.
 
     Returns a :class:`ProvisionOutcome`. Does NOT commit — the caller does.
@@ -98,7 +112,7 @@ def provision_for_request(
     iam_username = f"claude-{developer.username}-{cc.code}".lower()
 
     created_profile_arns: list[str] = []
-    credential_id: str | None = None
+    identity_created = False
 
     try:
         # --- step 1: ensure one active inference profile per model ----------
@@ -164,15 +178,15 @@ def provision_for_request(
             now_utc = datetime.now(timezone.utc)
             expires_at_dt = now_utc + timedelta(days=90)
 
-        provisioned = aws.provision_key(
+        aws.create_key_identity(
             iam_username=iam_username,
             cost_centre_code=cc.code,
             allowed_models=allowed_models,
             expiry_days=aws_expiry_days,
         )
-        credential_id = provisioned.credential_id
+        identity_created = True
 
-        # --- step 4: persist Key row ----------------------------------------
+        # --- step 4: persist 'ready' Key row (no credential yet) ------------
         if not expires_at_str:
             now_utc = datetime.now(timezone.utc)
         key = Key(
@@ -180,8 +194,8 @@ def provision_for_request(
             cost_centre_id=cc.id,
             key_request_id=key_request.id,
             iam_username=iam_username,
-            credential_id=provisioned.credential_id,
-            status="active",
+            credential_id=None,
+            status="ready",
             allowed_models=allowed_models,
             rolling_limit=constraints.get("rolling_limit"),
             rolling_period_days=constraints.get("rolling_period_days"),
@@ -201,9 +215,9 @@ def provision_for_request(
             entity_id=key.id,
             new_values={
                 "iam_username": iam_username,
-                "credential_id": provisioned.credential_id,
                 "allowed_models": allowed_models,
                 "cost_centre_id": cc.id,
+                "status": "ready",
             },
             ip_address=ip_address,
         )
@@ -213,16 +227,15 @@ def provision_for_request(
         compensate_aws(
             aws,
             created_profile_arns=created_profile_arns,
-            credential_id=credential_id,
             iam_username=iam_username,
+            identity_created=identity_created,
         )
         raise
 
     return ProvisionOutcome(
         key=key,
-        bearer_token=provisioned.bearer_token,
         profile_refs=profile_refs,
         created_profile_arns=created_profile_arns,
-        credential_id=provisioned.credential_id,
         iam_username=iam_username,
+        identity_created=identity_created,
     )

@@ -8,8 +8,7 @@ import {
   useApproveKeyRequest,
   useRejectKeyRequest,
 } from '../features/keyRequests/api'
-import type { KeyRequest, ProvisionedKey } from '../features/keyRequests/types'
-import { TokenReveal } from '../components/TokenReveal'
+import type { KeyRequest } from '../features/keyRequests/types'
 
 // Default model options for the approve panel — mirrors the seed allowed_models
 // for the mock AWS service. A Phase-9 settings endpoint will replace this constant.
@@ -33,34 +32,26 @@ export function KeyRequestsPage() {
 
   const { data: allRequests, isLoading, isError } = useKeyRequests()
 
-  // Reviewer-level provisioned key to show after approving — lifted here so the
-  // TokenReveal persists even after the invalidation removes the row.
-  const [reviewerKey, setReviewerKey] = useState<ProvisionedKey | null>(null)
+  // After a reviewer approves, show a confirmation — never a token. The
+  // developer retrieves the bearer token themselves from the Keys page.
+  const [reviewMessage, setReviewMessage] = useState<string | null>(null)
 
   const myRequests = (allRequests ?? []).filter(
     (r) => String(r.developer_id) === String(user?.id),
   )
   const pendingRequests = (allRequests ?? []).filter((r) => r.status === 'pending')
 
-  if (reviewerKey) {
-    return (
-      <section className="panel panel--wide">
-        <div className="panel__header">
-          <h1>Key requests</h1>
-        </div>
-        <TokenReveal
-          provisionedKey={reviewerKey}
-          onDismiss={() => setReviewerKey(null)}
-        />
-      </section>
-    )
-  }
-
   return (
     <section className="panel panel--wide">
       <div className="panel__header">
         <h1>Key requests</h1>
       </div>
+
+      {reviewMessage && (
+        <p className="status status--ok" role="status">
+          {reviewMessage}
+        </p>
+      )}
 
       {isLoading && (
         <p className="status status--loading">Loading key requests…</p>
@@ -130,7 +121,11 @@ export function KeyRequestsPage() {
                   <PendingRequestRow
                     key={req.id}
                     request={req}
-                    onProvisioned={setReviewerKey}
+                    onApproved={(developer) =>
+                      setReviewMessage(
+                        `Approved. ${developer} will retrieve their key from the Keys page.`,
+                      )
+                    }
                   />
                 ))}
               </tbody>
@@ -148,7 +143,7 @@ function RequestKeyForm() {
   const [costCentreId, setCostCentreId] = useState('')
   const [justification, setJustification] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [provisionedKey, setProvisionedKey] = useState<ProvisionedKey | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const activeCostCentres = (costCentres ?? []).filter(
     (cc) => cc.status === 'active',
@@ -157,6 +152,7 @@ function RequestKeyForm() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setError(null)
+    setNotice(null)
     try {
       const result = await create.mutateAsync({
         cost_centre_id: costCentreId,
@@ -164,12 +160,13 @@ function RequestKeyForm() {
       })
       setCostCentreId('')
       setJustification('')
-      // Only show TokenReveal when the request was auto-approved and a key was
-      // returned. A pending result with key===null is the normal path.
-      if (result.request.status === 'approved' && result.key) {
-        setProvisionedKey(result.key)
-      } else if (result.request.status === 'approved' && !result.key) {
-        setError('Approved, but no key token was returned — contact your administrator.')
+      // Auto-approval (requester is a CCO of the CC) provisions a 'ready' key but
+      // never returns a token — retrieve it from the Keys page. Otherwise it's a
+      // normal pending request awaiting review.
+      if (result.request.status === 'approved') {
+        setNotice('Auto-approved. Head to the Keys page to retrieve your token.')
+      } else {
+        setNotice('Request submitted — you will be notified when it is approved.')
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -178,15 +175,6 @@ function RequestKeyForm() {
         setError('Unable to submit request. Please try again.')
       }
     }
-  }
-
-  if (provisionedKey) {
-    return (
-      <TokenReveal
-        provisionedKey={provisionedKey}
-        onDismiss={() => setProvisionedKey(null)}
-      />
-    )
   }
 
   return (
@@ -224,6 +212,11 @@ function RequestKeyForm() {
           {error}
         </p>
       )}
+      {notice && (
+        <p className="status status--ok" role="status">
+          {notice}
+        </p>
+      )}
       <button type="submit" disabled={create.isPending}>
         {create.isPending ? 'Submitting…' : 'Submit request'}
       </button>
@@ -233,10 +226,10 @@ function RequestKeyForm() {
 
 function PendingRequestRow({
   request,
-  onProvisioned,
+  onApproved,
 }: {
   request: KeyRequest
-  onProvisioned: (key: ProvisionedKey) => void
+  onApproved: (developerName: string) => void
 }) {
   const [panel, setPanel] = useState<'none' | 'approve' | 'reject'>('none')
 
@@ -274,9 +267,11 @@ function PendingRequestRow({
             <ApprovePanel
               request={request}
               onDone={() => setPanel('none')}
-              onProvisioned={(key) => {
+              onApproved={() => {
                 setPanel('none')
-                onProvisioned(key)
+                onApproved(
+                  `${request.developer_display_name} (${request.developer_username})`,
+                )
               }}
             />
           </td>
@@ -296,11 +291,11 @@ function PendingRequestRow({
 function ApprovePanel({
   request,
   onDone,
-  onProvisioned,
+  onApproved,
 }: {
   request: KeyRequest
   onDone: () => void
-  onProvisioned: (key: ProvisionedKey) => void
+  onApproved: () => void
 }) {
   const approve = useApproveKeyRequest()
   const { data: costCentres } = useCostCentres()
@@ -368,15 +363,12 @@ function ApprovePanel({
         input.expires_at = new Date(expiresAt + 'T23:59:59Z').toISOString()
       }
 
-      const result = await approve.mutateAsync({
+      await approve.mutateAsync({
         id: request.id,
         input,
       })
-      if (result.key) {
-        onProvisioned(result.key)
-      } else {
-        setError('Approved, but no key token was returned — contact your administrator.')
-      }
+      // No token is returned to the approver — the developer retrieves it.
+      onApproved()
     } catch {
       setError('Unable to approve request. Please try again.')
     }

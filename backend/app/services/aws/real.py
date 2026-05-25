@@ -41,6 +41,22 @@ class RealAwsService(AwsService):
     ) -> ProvisionedKey:
         raise NotImplementedError(_DEFERRED)
 
+    def create_key_identity(
+        self,
+        *,
+        iam_username: str,
+        cost_centre_code: str,
+        allowed_models: list[str],
+        expiry_days: int,
+    ) -> None:
+        raise NotImplementedError(_DEFERRED)
+
+    def issue_credential(self, *, iam_username: str) -> ProvisionedKey:
+        raise NotImplementedError(_DEFERRED)
+
+    def delete_key_identity(self, *, iam_username: str) -> None:
+        raise NotImplementedError(_DEFERRED)
+
     def revoke_key(self, *, iam_username: str, credential_id: str) -> None:
         raise NotImplementedError(_DEFERRED)
 
