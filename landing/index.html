@@ -1189,6 +1189,13 @@ a { color: var(--accent); text-decoration: none; }
       <p>Every approval, provision, stop, restart, and revoke is recorded with actor, IP, and JSON metadata. Admin-only access. Useful for compliance reviews — and indispensable when something goes sideways.</p>
       <div class="feature__tag"><span>retention:</span> append-only, indexed</div>
     </article>
+
+    <article class="feature">
+      <div class="feature__num">/ 10</div>
+      <h3>Developer CLI</h3>
+      <p>A thin <code style="font-family:var(--font-mono);color:var(--accent)">caws</code> command-line client for the terminal where Claude Code actually runs. Retrieve your token once straight into the shell, list keys with live spend, and see why a key stopped — no browser needed. The token lands in your OS keychain, never a plaintext rc file.</p>
+      <div class="feature__tag"><span>roadmap:</span> ships after the dashboards</div>
+    </article>
   </div>
 </section>
 
@@ -1354,7 +1361,7 @@ a { color: var(--accent); text-decoration: none; }
 (function() {
   const SLIDES = [
     { src: 'screenshots/01-login.png', title: 'Sign-in',                    desc: 'JWT-backed PoC auth. SSO ships in production.' },
-    { src: 'screenshots/02-home.png',  title: 'Home',                       desc: 'Role-aware dashboard. One landing per persona.' },
+    { src: 'screenshots/02-home.png',  title: 'Token retrieval',            desc: 'The approver never sees the token — the developer claims it once.' },
     { src: 'screenshots/03-cost-centres.png', title: 'Cost centres',        desc: 'Budgets, owners, archival. The unit of governance.' },
     { src: 'screenshots/04-key-requests.png', title: 'Key requests',        desc: 'Self-service ask → CCO approval with constraints.' },
     { src: 'screenshots/05-keys-developer.png', title: 'Developer keys',    desc: 'Your keys, with live rolling and lifetime spend.' },

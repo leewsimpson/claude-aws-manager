@@ -214,6 +214,23 @@ At this point the full core idea runs end-to-end, **completely local against the
 
 ---
 
+## Phase 8.5 — Developer CLI
+
+**Goal:** A thin command-line client so developers manage tokens from the terminal — where Claude Code actually runs — without opening the browser. Scheduled after Phase 8, but it only depends on the Phase 5–7 endpoints (`retrieve`, `keys`, `usage`). It is a **pure REST API client**: no backend changes for the read/retrieve MVP, no business logic, and no token persisted beyond secure local storage.
+
+- [ ] CLI scaffold (`/cli`) — packaged separately (Python via uv/pipx); talks to the backend REST API only
+- [ ] `caws login` — username/password → JWT in `~/.config/caws/` (0600); mirrors PoC auth, leaving room for the production SSO device flow
+- [ ] `caws keys` — list your keys with status and live rolling + lifetime spend vs limits
+- [ ] `caws retrieve <id>` — `POST /keys/{id}/retrieve`; write the once-only token to the OS keychain (or a 0600 file), not stdout by default
+- [ ] `caws env` — print `export AWS_BEARER_TOKEN_BEDROCK=…` for `eval "$(caws env)"`, sourced from secure local storage
+- [ ] `caws regenerate <id>` — lost-token recovery path
+- [ ] `caws status` — why a key stopped and when it resumes (reuses `GET /keys/{id}/usage`)
+- [ ] Out of scope (stays web-only): request submission, approvals, CC/admin management
+
+**Outputs:** Developers retrieve and refresh tokens straight into their environment from the terminal, with safer secret handling than browser copy-paste.
+
+---
+
 ## Phase 9 — Budget Alerts & Global Policies
 
 **Goal:** Configurable threshold alerts and admin-level policy controls.
@@ -296,6 +313,8 @@ Phase 7  Cost Tracking & Budget Enforcement
 ══ ⭐ Clickable local prototype — FEEDBACK CHECKPOINT ══
    ↓
 Phase 8  Dashboards & Visualisations
+   ↓
+Phase 8.5  Developer CLI (thin API client over P5–P7 endpoints)
    ↓
 Phase 9  Budget Alerts & Global Policies
    ↓

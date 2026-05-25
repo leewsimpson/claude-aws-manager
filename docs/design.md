@@ -73,6 +73,7 @@ C4Container
 | **Frontend** | React + Vite (TypeScript) | SPA serving developer, CCO, and admin dashboards. Communicates with backend via REST API. |
 | **Backend** | Python + FastAPI | API server handling authentication, business logic, AWS orchestration, and background cost polling. |
 | **Database** | PostgreSQL | Persistent storage for users, cost centres, key metadata, approvals, usage data, cached pricing, and audit logs. |
+| **Developer CLI** _(post-Phase 8)_ | Python (uv/pipx) | Thin terminal client over the REST API — retrieve/refresh tokens into the local environment, list keys and spend. No business logic; token kept only in the OS keychain. |
 
 ### Deployment
 
@@ -155,6 +156,14 @@ Stores all application state. No secrets — bearer tokens are never persisted (
 | `alert_configs` | Configurable alert thresholds per cost centre |
 | `alert_history` | Record of triggered alerts (prevents duplicate notifications) |
 | `audit_log` | Record of all state-changing actions (who did what, when) |
+
+### 3.4 Developer CLI (Post-Phase 8)
+
+A thin command-line client over the same REST API the SPA uses — for developers who prefer to stay in the terminal where Claude Code runs. It carries no business logic and is a pure client of existing endpoints (`POST /keys/{id}/retrieve`, `GET /keys`, `GET /keys/{id}/usage`), so it needs no backend changes for its retrieve/read MVP.
+
+- **Auth:** `caws login` exchanges credentials for a JWT stored locally (PoC: username/password; production: SSO device flow), reusing the same `/api/auth` the SPA uses.
+- **Token handling:** a retrieved bearer token is written to the OS keychain (or a `0600` file) and surfaced via `caws env` for `eval "$(caws env)"` — **never persisted server-side**, consistent with §6. Safer than browser copy-paste into a shell rc file.
+- **Scope:** list keys + live spend, retrieve/regenerate tokens, and report stop/resume status. Requesting and approving keys, and CC/admin management, stay web-only.
 
 ---
 

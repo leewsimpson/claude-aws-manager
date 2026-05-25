@@ -41,6 +41,7 @@ A user can hold multiple roles simultaneously (e.g., a Cost Centre Owner can als
 - Copies key + setup instructions to configure Claude Code locally
 - Can **self-deactivate** any of their own keys (e.g., when leaving a cost centre)
 - Can see when they've been stopped (limit reached) and when tokens become available again
+- Can optionally manage keys from a **command-line client** (`caws` CLI) — retrieve and refresh the token straight into the terminal environment (post-Phase 8; see §3.1.4)
 
 ### 2.3 Cost Centre Owner
 
@@ -123,6 +124,17 @@ A cost centre can have **multiple Cost Centre Owners** (e.g., a team lead and a 
 - Rotate/regenerate a key
 - **Self-deactivate** any of their own keys
 - Revoke/delete own keys
+
+#### 3.1.4 Developer CLI (Post-Phase 8)
+
+A thin command-line client for developers who live in the terminal — a convenience layer over the same REST API the web portal uses, not a separate capability. **No token is persisted server-side**; the CLI stores a retrieved token only in the developer's OS keychain (or a `0600` file), which is safer than browser copy-paste into a shell rc file.
+
+- Authenticate (PoC: username/password → local JWT; production: SSO device flow)
+- List own keys with status and live spend vs limits
+- Retrieve the once-only token and write it to secure local storage
+- Emit `export AWS_BEARER_TOKEN_BEDROCK=…` for shell sourcing (`eval "$(caws env)"`)
+- Regenerate a lost token; show why a key stopped and when it resumes
+- Out of scope: requesting/approving keys and cost centre/admin management remain web-only
 
 ### 3.2 Admin Control Plane
 

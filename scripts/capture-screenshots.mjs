@@ -9,16 +9,21 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUT = join(__dirname, '..', 'screenshots')
 const FRONTEND = 'http://localhost:5173'
 const BACKEND = 'http://localhost:8000'
 const PORT = 9222
+// Chrome location is platform-dependent; allow CHROME_BIN to override.
 const CHROME =
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  process.env.CHROME_BIN ||
+  (process.platform === 'darwin'
+    ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe')
 const W = 1280
-const H = 1480
+const H = 1480 // minimum clip height; tall pages are captured in full (see below)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -103,7 +108,7 @@ function cdpClient(url) {
 async function main() {
   mkdirSync(OUT, { recursive: true })
   const token = await getToken()
-  const userDataDir = join(process.env.TEMP || '/tmp', `cr-shots-${Date.now()}`)
+  const userDataDir = join(process.env.TEMP || tmpdir(), `cr-shots-${Date.now()}`)
   const chrome = launchChrome(userDataDir)
   try {
     const { ready, send, close } = cdpClient(await wsTarget())
@@ -135,10 +140,17 @@ async function main() {
         awaitPromise: true,
       })
       await sleep(400)
+      // Capture the full page so tall lists (keys, requests) aren't clipped.
+      const { result: heightResult } = await send('Runtime.evaluate', {
+        expression:
+          'Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)',
+        returnByValue: true,
+      })
+      const pageH = Math.min(Math.max(Number(heightResult?.value) || H, H), 6000)
       const { data } = await send('Page.captureScreenshot', {
         format: 'png',
         captureBeyondViewport: true,
-        clip: { x: 0, y: 0, width: W, height: H, scale: 1 },
+        clip: { x: 0, y: 0, width: W, height: pageH, scale: 1 },
       })
       writeFileSync(join(OUT, shot.file), Buffer.from(data, 'base64'))
       console.log(`saved ${shot.file}`)
