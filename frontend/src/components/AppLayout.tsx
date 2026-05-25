@@ -2,29 +2,36 @@ import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 
-// Shared chrome for authenticated pages: top nav with the app name, primary
-// links, and the signed-in user + logout. Pages render their content inside a
-// wide container (vs. the centred card used for login).
+// Primary nav links. `roles` undefined = visible to every authenticated user;
+// otherwise the link shows only if the user holds one of the listed roles.
+// Order matches role precedence so each role's home sits first in its menu.
+const NAV_LINKS: { to: string; label: string; roles?: string[] }[] = [
+  { to: '/usage', label: 'Usage', roles: ['admin'] },
+  { to: '/cost-centres', label: 'Cost centres', roles: ['admin', 'cco'] },
+  { to: '/key-requests', label: 'Key requests' },
+  { to: '/keys', label: 'Keys' },
+]
+
+// Shared chrome for authenticated pages: top nav with the app name, the links
+// relevant to the signed-in user's role(s), and the user + logout. Pages render
+// their content inside a wide container (vs. the centred card used for login).
 export function AppLayout({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth()
+  const { user, roles, logout } = useAuth()
+
+  const links = NAV_LINKS.filter(
+    (link) => !link.roles || link.roles.some((role) => roles.includes(role)),
+  )
 
   return (
     <div className="layout">
       <header className="nav">
         <div className="nav__brand">Claude Code AWS Bedrock Manager</div>
         <nav className="nav__links">
-          <NavLink to="/" end className="nav__link">
-            Home
-          </NavLink>
-          <NavLink to="/cost-centres" className="nav__link">
-            Cost centres
-          </NavLink>
-          <NavLink to="/key-requests" className="nav__link">
-            Key requests
-          </NavLink>
-          <NavLink to="/keys" className="nav__link">
-            Keys
-          </NavLink>
+          {links.map((link) => (
+            <NavLink key={link.to} to={link.to} className="nav__link">
+              {link.label}
+            </NavLink>
+          ))}
         </nav>
         <div className="nav__user">
           {user && (

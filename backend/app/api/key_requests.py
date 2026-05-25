@@ -83,12 +83,14 @@ def _resolve_constraints(
     overrides: ApprovalConstraints | None,
     *,
     global_allowed: list[str],
+    cc_defaults: dict | None = None,
 ) -> dict:
-    """Merge global settings with any approval-time overrides.
+    """Merge global settings → CC request_defaults → approval overrides.
 
     Validates that overridden allowed_models is a subset of global_allowed.
     Returns a dict with keys: allowed_models, rolling_limit,
-    rolling_period_days, lifetime_budget, expiry_days.
+    rolling_period_days, lifetime_budget, expires_at.
+    ``expires_at`` is an ISO 8601 string (hard date) or None.
     """
     # Read global settings once
     rolling_setting_row = db.get(GlobalSetting, "default_rolling_limit")
@@ -104,12 +106,32 @@ def _resolve_constraints(
     expiry_row = db.get(GlobalSetting, "default_key_expiry_days")
     default_expiry_days = expiry_row.value if expiry_row else 90
 
+    # Layer 1: global defaults
     resolved_models = global_allowed
     resolved_rolling_limit = default_rolling_limit
     resolved_rolling_period_days = default_rolling_period_days
     resolved_lifetime_budget = default_lifetime_budget
+    resolved_expires_at: str | None = None
     resolved_expiry_days = default_expiry_days
 
+    # Layer 2: CC request_defaults
+    if cc_defaults:
+        if cc_defaults.get("allowed_models"):
+            # CC defaults must be a subset of global allowed
+            invalid = set(cc_defaults["allowed_models"]) - set(global_allowed)
+            if not invalid:
+                resolved_models = cc_defaults["allowed_models"]
+        if cc_defaults.get("rolling_limit") is not None:
+            resolved_rolling_limit = cc_defaults["rolling_limit"]
+        if cc_defaults.get("rolling_period_days") is not None:
+            resolved_rolling_period_days = cc_defaults["rolling_period_days"]
+        if cc_defaults.get("lifetime_budget") is not None:
+            resolved_lifetime_budget = cc_defaults["lifetime_budget"]
+        if cc_defaults.get("expires_at") is not None:
+            resolved_expires_at = cc_defaults["expires_at"]
+            resolved_expiry_days = None  # hard date supersedes relative days
+
+    # Layer 3: approval-time overrides (highest priority)
     if overrides is not None:
         if overrides.allowed_models is not None:
             invalid = set(overrides.allowed_models) - set(global_allowed)
@@ -128,8 +150,12 @@ def _resolve_constraints(
             resolved_rolling_period_days = overrides.rolling_period_days
         if overrides.lifetime_budget is not None:
             resolved_lifetime_budget = overrides.lifetime_budget
-        if overrides.expiry_days is not None:
+        if overrides.expires_at is not None:
+            resolved_expires_at = overrides.expires_at.isoformat()
+            resolved_expiry_days = None
+        elif overrides.expiry_days is not None:
             resolved_expiry_days = overrides.expiry_days
+            resolved_expires_at = None
 
     if not resolved_models:
         raise HTTPException(
@@ -145,7 +171,8 @@ def _resolve_constraints(
         "rolling_limit": resolved_rolling_limit,
         "rolling_period_days": resolved_rolling_period_days,
         "lifetime_budget": resolved_lifetime_budget,
-        "expiry_days": int(resolved_expiry_days),
+        "expires_at": resolved_expires_at,
+        "expiry_days": int(resolved_expiry_days) if resolved_expiry_days is not None else None,
     }
 
 
@@ -345,7 +372,9 @@ def create_key_request(
     is_cco_of_cc = _is_cco_of(db, actor.id, cc.id)
     if is_cco_of_cc:
         global_models = _get_global_allowed_models(db)
-        constraints = _resolve_constraints(db, None, global_allowed=global_models)
+        constraints = _resolve_constraints(
+            db, None, global_allowed=global_models, cc_defaults=cc.request_defaults,
+        )
 
         now = datetime.now(timezone.utc)
         kr.status = "approved"
@@ -505,7 +534,10 @@ def approve_key_request(
         )
 
     global_models = _get_global_allowed_models(db)
-    constraints = _resolve_constraints(db, body, global_allowed=global_models)
+    cc = db.get(CostCentre, kr.cost_centre_id)
+    constraints = _resolve_constraints(
+        db, body, global_allowed=global_models, cc_defaults=cc.request_defaults if cc else None,
+    )
 
     now = datetime.now(timezone.utc)
     kr.status = "approved"

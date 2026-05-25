@@ -144,17 +144,37 @@ def provision_for_request(
             )
 
         # --- step 2+3: provision the key via AWS ----------------------------
-        expiry_days: int = constraints["expiry_days"]
+        expiry_days: int | None = constraints.get("expiry_days")
+        expires_at_str: str | None = constraints.get("expires_at")
+
+        # Determine the actual expiry_days for AWS and the final expires_at for the key
+        if expires_at_str:
+            from datetime import datetime as _dt
+            expires_at_dt = _dt.fromisoformat(expires_at_str)
+            # Calculate days from now for the AWS call
+            now_utc = datetime.now(timezone.utc)
+            delta = expires_at_dt - now_utc
+            aws_expiry_days = max(int(delta.total_seconds() / 86400), 1)
+        elif expiry_days:
+            aws_expiry_days = expiry_days
+            now_utc = datetime.now(timezone.utc)
+            expires_at_dt = now_utc + timedelta(days=expiry_days)
+        else:
+            aws_expiry_days = 90  # fallback
+            now_utc = datetime.now(timezone.utc)
+            expires_at_dt = now_utc + timedelta(days=90)
+
         provisioned = aws.provision_key(
             iam_username=iam_username,
             cost_centre_code=cc.code,
             allowed_models=allowed_models,
-            expiry_days=expiry_days,
+            expiry_days=aws_expiry_days,
         )
         credential_id = provisioned.credential_id
 
         # --- step 4: persist Key row ----------------------------------------
-        now_utc = datetime.now(timezone.utc)
+        if not expires_at_str:
+            now_utc = datetime.now(timezone.utc)
         key = Key(
             developer_id=developer.id,
             cost_centre_id=cc.id,
@@ -167,7 +187,7 @@ def provision_for_request(
             rolling_period_days=constraints.get("rolling_period_days"),
             lifetime_budget=constraints.get("lifetime_budget"),
             lifetime_spend=0,
-            expires_at=now_utc + timedelta(days=expiry_days) if expiry_days else None,
+            expires_at=expires_at_dt,
         )
         db.add(key)
         db.flush()

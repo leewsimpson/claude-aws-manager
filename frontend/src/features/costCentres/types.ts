@@ -7,6 +7,14 @@ export interface Owner {
   assigned_at: string
 }
 
+export interface RequestDefaults {
+  allowed_models?: string[]
+  rolling_limit?: number | null
+  rolling_period_days?: number | null
+  lifetime_budget?: number | null
+  expires_at?: string | null
+}
+
 export interface CostCentre {
   id: string
   code: string
@@ -14,6 +22,7 @@ export interface CostCentre {
   description: string | null
   status: 'active' | 'archived'
   budget_cap: number | null
+  request_defaults: RequestDefaults | null
   created_by: string
   created_at: string
   updated_at: string
@@ -34,10 +43,12 @@ export interface CreateCostCentreInput {
   name: string
   description?: string
   budget_cap?: number | null
+  request_defaults?: RequestDefaults | null
 }
 
 export interface UpdateCostCentreInput {
   name?: string
   description?: string | null
   budget_cap?: number | null
+  request_defaults?: RequestDefaults | null
 }

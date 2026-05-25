@@ -1,0 +1,54 @@
+name: Deploy landing page to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - landing/**
+      - .github/workflows/deploy-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate HTML
+        run: |
+          python3 << 'VALIDATE'
+          import sys, pathlib
+          html_file = pathlib.Path('landing/index.html')
+          if not html_file.exists():
+            print('❌ landing/index.html not found')
+            sys.exit(1)
+          src = html_file.read_text()
+          if '<html' not in src or '</html>' not in src:
+            print('❌ Missing html tags')
+            sys.exit(1)
+          print(f'✓ HTML valid ({len(src)} bytes, {len(pathlib.Path("landing/screenshots").glob("*.png"))} screenshots)')
+          VALIDATE
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -29,6 +29,7 @@ from app.schemas.cost_centre import (
     CostCentreUpdate,
     OwnerAssign,
     OwnerSummary,
+    RequestDefaults,
 )
 from app.schemas.usage import CcKeyUsageSummary, CcUsageOut, ModelUsageSummary
 from app.services.aws import AwsService, KeyNotFoundError, get_aws_service
@@ -60,6 +61,7 @@ def _serialise(db: Session, cc: CostCentreModel) -> CostCentre:
         description=cc.description,
         status=cc.status,
         budget_cap=cc.budget_cap,
+        request_defaults=cc.request_defaults,
         created_by=cc.created_by,
         created_at=cc.created_at,
         updated_at=cc.updated_at,
@@ -98,6 +100,11 @@ def create_cost_centre(
         name=body.name,
         description=body.description,
         budget_cap=body.budget_cap,
+        request_defaults=(
+            body.request_defaults.model_dump(mode="json", exclude_none=True)
+            if body.request_defaults
+            else None
+        ),
         status="active",
         created_by=actor.id,
     )
@@ -167,6 +174,9 @@ def update_cost_centre(
     old_values: dict = {}
     new_values: dict = {}
     for field, new in fields.items():
+        if field == "request_defaults" and new is not None:
+            # Serialize the RequestDefaults Pydantic model to a plain dict for JSONB
+            new = body.request_defaults.model_dump(mode="json", exclude_none=True) if body.request_defaults else None
         current = getattr(cc, field)
         if current != new:
             old_values[field] = current
@@ -406,8 +416,65 @@ def remove_owner(
 
 
 # ---------------------------------------------------------------------------
-# Usage endpoint
+# Request defaults endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/{cc_id}/defaults", response_model=RequestDefaults | None)
+def get_request_defaults(
+    cc_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> RequestDefaults | None:
+    """Return the request defaults for a cost centre (admin or CCO-of-cc)."""
+    cc = _get_cc_or_404(db, cc_id)
+    is_admin = "admin" in (actor.roles or [])
+
+    if not is_admin and not _is_cco_of(db, actor.id, cc.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
+
+    if cc.request_defaults is None:
+        return None
+
+    return RequestDefaults(**cc.request_defaults)
+
+
+@router.put("/{cc_id}/defaults", response_model=CostCentre)
+def set_request_defaults(
+    cc_id: uuid.UUID,
+    body: RequestDefaults,
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> CostCentre:
+    """Set or replace request defaults for a cost centre (admin or CCO-of-cc)."""
+    cc = _get_cc_or_404(db, cc_id)
+    is_admin = "admin" in (actor.roles or [])
+
+    if not is_admin and not _is_cco_of(db, actor.id, cc.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
+
+    old_defaults = cc.request_defaults
+    new_defaults = body.model_dump(mode="json", exclude_none=True) or None
+    cc.request_defaults = new_defaults
+
+    record_audit(
+        db,
+        actor_id=actor.id,
+        action="cc.defaults_updated",
+        entity_type="cost_centre",
+        entity_id=cc.id,
+        old_values={"request_defaults": old_defaults},
+        new_values={"request_defaults": new_defaults},
+        ip_address=_client_ip(request),
+    )
+    db.commit()
+    db.refresh(cc)
+    return _serialise(db, cc)
 
 
 def _is_cco_of(db: Session, user_id: uuid.UUID, cc_id: uuid.UUID) -> bool:

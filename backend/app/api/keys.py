@@ -472,8 +472,13 @@ def update_constraints(
         new_values["lifetime_budget"] = body.lifetime_budget
         key.lifetime_budget = body.lifetime_budget
 
-    # --- expiry_days ---
-    if body.expiry_days is not None:
+    # --- expiry ---
+    if body.expires_at is not None:
+        old_expires = key.expires_at
+        old_values["expires_at"] = old_expires
+        new_values["expires_at"] = body.expires_at
+        key.expires_at = body.expires_at
+    elif body.expiry_days is not None:
         old_expires = key.expires_at
         new_expires = datetime.now(timezone.utc) + timedelta(days=body.expiry_days)
         old_values["expires_at"] = old_expires

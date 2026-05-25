@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
 
 
 class OwnerSummary(BaseModel):
@@ -17,11 +18,26 @@ class OwnerSummary(BaseModel):
     assigned_at: datetime
 
 
+class RequestDefaults(BaseModel):
+    """Default constraints for new key requests in a cost centre.
+
+    All fields are optional; unset fields fall back to global settings.
+    ``expires_at`` is a hard project-end date (not a relative duration).
+    """
+
+    allowed_models: list[str] | None = None
+    rolling_limit: float | None = Field(default=None, ge=0)
+    rolling_period_days: int | None = Field(default=None, ge=1)
+    lifetime_budget: float | None = Field(default=None, ge=0)
+    expires_at: datetime | None = None
+
+
 class CostCentreCreate(BaseModel):
     code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     budget_cap: float | None = Field(default=None, ge=0)
+    request_defaults: RequestDefaults | None = None
 
 
 class CostCentreUpdate(BaseModel):
@@ -30,6 +46,7 @@ class CostCentreUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     budget_cap: float | None = Field(default=None, ge=0)
+    request_defaults: RequestDefaults | None = None
 
 
 class OwnerAssign(BaseModel):
@@ -47,6 +64,7 @@ class CostCentre(BaseModel):
     description: str | None
     status: str
     budget_cap: float | None
+    request_defaults: dict[str, Any] | None = None
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime

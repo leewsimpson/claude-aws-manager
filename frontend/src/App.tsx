@@ -2,11 +2,12 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { AppLayout } from './components/AppLayout'
-import { HomePage } from './pages/HomePage'
+import { HomeRedirect } from './components/HomeRedirect'
 import { CostCentresPage } from './pages/CostCentresPage'
 import { KeyRequestsPage } from './pages/KeyRequestsPage'
 import { KeysPage } from './pages/KeysPage'
 import { LoginPage } from './pages/LoginPage'
+import { UsagePage } from './pages/UsagePage'
 
 function App() {
   return (
@@ -16,8 +17,16 @@ function App() {
         path="/"
         element={
           <ProtectedRoute>
+            <HomeRedirect />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/usage"
+        element={
+          <ProtectedRoute requireRoles={['admin']}>
             <AppLayout>
-              <HomePage />
+              <UsagePage />
             </AppLayout>
           </ProtectedRoute>
         }
@@ -25,7 +34,7 @@ function App() {
       <Route
         path="/cost-centres"
         element={
-          <ProtectedRoute>
+          <ProtectedRoute requireRoles={['admin', 'cco']}>
             <AppLayout>
               <CostCentresPage />
             </AppLayout>

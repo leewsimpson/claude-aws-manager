@@ -8,6 +8,7 @@ export interface ApprovedConstraints {
   rolling_period_days: number | null
   lifetime_budget: number | null
   expiry_days: number | null
+  expires_at: string | null
 }
 
 export interface KeyRequest {
@@ -65,6 +66,7 @@ export interface ApproveKeyRequestInput {
   rolling_period_days?: number
   lifetime_budget?: number
   expiry_days?: number
+  expires_at?: string
 }
 
 export interface RejectKeyRequestInput {

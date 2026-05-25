@@ -10,7 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class ApprovalConstraints(BaseModel):
     """Optional constraint overrides supplied at approve time.
 
-    Any field left unset is resolved from global settings.
+    Any field left unset is resolved from CC request_defaults, then global settings.
+    ``expires_at`` (hard date) takes precedence over ``expiry_days`` when both are set.
     """
 
     allowed_models: list[str] | None = None
@@ -18,6 +19,7 @@ class ApprovalConstraints(BaseModel):
     rolling_period_days: int | None = Field(default=None, ge=1)
     lifetime_budget: float | None = Field(default=None, ge=0)
     expiry_days: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None
 
 
 class KeyRequestCreate(BaseModel):

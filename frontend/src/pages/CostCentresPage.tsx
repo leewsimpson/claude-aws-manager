@@ -9,9 +9,10 @@ import {
   useRemoveOwner,
   useUnarchiveCostCentre,
   useUpdateCostCentre,
+  useUpdateCcDefaults,
   useUsers,
 } from '../features/costCentres/api'
-import type { CostCentre } from '../features/costCentres/types'
+import type { CostCentre, RequestDefaults } from '../features/costCentres/types'
 
 function formatBudget(value: number | null): string {
   if (value === null || value === undefined) return '—'
@@ -23,8 +24,9 @@ function formatBudget(value: number | null): string {
 }
 
 export function CostCentresPage() {
-  const { hasRole } = useAuth()
+  const { user, hasRole } = useAuth()
   const isAdmin = hasRole('admin')
+  const isCco = hasRole('cco')
   const { data, isLoading, isError } = useCostCentres()
 
   return (
@@ -56,13 +58,23 @@ export function CostCentresPage() {
               <th>Status</th>
               <th>Budget cap</th>
               <th>Owners</th>
-              {isAdmin && <th>Actions</th>}
+              {(isAdmin || isCco) && <th>Actions</th>}
             </tr>
           </thead>
           <tbody>
-            {data.map((cc) => (
-              <CostCentreRow key={cc.id} costCentre={cc} isAdmin={isAdmin} />
-            ))}
+            {data.map((cc) => {
+              const isCcoOfThis = cc.owners.some(
+                (o) => String(o.user_id) === String(user?.id),
+              )
+              return (
+                <CostCentreRow
+                  key={cc.id}
+                  costCentre={cc}
+                  isAdmin={isAdmin}
+                  isCco={isCcoOfThis}
+                />
+              )
+            })}
           </tbody>
         </table>
       )}
@@ -158,12 +170,15 @@ function CreateCostCentreForm() {
 function CostCentreRow({
   costCentre,
   isAdmin,
+  isCco,
 }: {
   costCentre: CostCentre
   isAdmin: boolean
+  isCco: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [managingOwners, setManagingOwners] = useState(false)
+  const [managingDefaults, setManagingDefaults] = useState(false)
   const archive = useArchiveCostCentre()
   const unarchive = useUnarchiveCostCentre()
 
@@ -171,6 +186,8 @@ function CostCentreRow({
     costCentre.owners.length > 0
       ? costCentre.owners.map((o) => o.username).join(', ')
       : '—'
+
+  const canManageDefaults = isAdmin || isCco
 
   return (
     <>
@@ -184,44 +201,67 @@ function CostCentreRow({
         </td>
         <td>{formatBudget(costCentre.budget_cap)}</td>
         <td>{ownerNames}</td>
-        {isAdmin && (
+        {(isAdmin || isCco) && (
           <td className="table__actions">
-            <button
-              type="button"
-              className="btn btn--small"
-              onClick={() => setEditing((v) => !v)}
-            >
-              {editing ? 'Close' : 'Edit'}
-            </button>
-            <button
-              type="button"
-              className="btn btn--small"
-              onClick={() => setManagingOwners((v) => !v)}
-            >
-              Owners
-            </button>
-            {costCentre.status === 'active' ? (
-              <button
-                type="button"
-                className="btn btn--small btn--danger"
-                disabled={archive.isPending}
-                onClick={() => archive.mutate(costCentre.id)}
-              >
-                Archive
-              </button>
-            ) : (
+            {canManageDefaults && (
               <button
                 type="button"
                 className="btn btn--small"
-                disabled={unarchive.isPending}
-                onClick={() => unarchive.mutate(costCentre.id)}
+                onClick={() => setManagingDefaults((v) => !v)}
               >
-                Unarchive
+                {managingDefaults ? 'Close' : 'Defaults'}
               </button>
+            )}
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => setEditing((v) => !v)}
+                >
+                  {editing ? 'Close' : 'Edit'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => setManagingOwners((v) => !v)}
+                >
+                  Owners
+                </button>
+                {costCentre.status === 'active' ? (
+                  <button
+                    type="button"
+                    className="btn btn--small btn--danger"
+                    disabled={archive.isPending}
+                    onClick={() => archive.mutate(costCentre.id)}
+                  >
+                    Archive
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    disabled={unarchive.isPending}
+                    onClick={() => unarchive.mutate(costCentre.id)}
+                  >
+                    Unarchive
+                  </button>
+                )}
+              </>
             )}
           </td>
         )}
       </tr>
+      {managingDefaults && (
+        <tr>
+          <td colSpan={6}>
+            <DefaultsPanel
+              costCentre={costCentre}
+              onDone={() => setManagingDefaults(false)}
+            />
+          </td>
+        </tr>
+      )}
       {isAdmin && editing && (
         <tr>
           <td colSpan={6}>
@@ -380,5 +420,167 @@ function OwnersPanel({ costCentre }: { costCentre: CostCentre }) {
         </button>
       </div>
     </div>
+  )
+}
+
+const DEFAULT_MODEL_OPTIONS = [
+  'anthropic.claude-sonnet-4-6',
+  'anthropic.claude-haiku-4-5',
+]
+
+function toDateInputValue(iso: string | null | undefined): string {
+  if (!iso) return ''
+  return iso.slice(0, 10)
+}
+
+function DefaultsPanel({
+  costCentre,
+  onDone,
+}: {
+  costCentre: CostCentre
+  onDone: () => void
+}) {
+  const updateDefaults = useUpdateCcDefaults()
+  const defaults = costCentre.request_defaults
+
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(
+    new Set(defaults?.allowed_models ?? DEFAULT_MODEL_OPTIONS),
+  )
+  const [rollingLimit, setRollingLimit] = useState(
+    defaults?.rolling_limit != null ? String(defaults.rolling_limit) : '',
+  )
+  const [rollingPeriodDays, setRollingPeriodDays] = useState(
+    defaults?.rolling_period_days != null
+      ? String(defaults.rolling_period_days)
+      : '',
+  )
+  const [lifetimeBudget, setLifetimeBudget] = useState(
+    defaults?.lifetime_budget != null ? String(defaults.lifetime_budget) : '',
+  )
+  const [expiresAt, setExpiresAt] = useState(
+    toDateInputValue(defaults?.expires_at),
+  )
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  function toggleModel(model: string) {
+    setSelectedModels((prev) => {
+      const next = new Set(prev)
+      if (next.has(model)) {
+        next.delete(model)
+      } else {
+        next.add(model)
+      }
+      return next
+    })
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    setError(null)
+    setSuccess(false)
+    try {
+      const input: RequestDefaults = {}
+      if (selectedModels.size > 0) {
+        input.allowed_models = Array.from(selectedModels)
+      }
+      if (rollingLimit.trim()) input.rolling_limit = Number(rollingLimit)
+      if (rollingPeriodDays.trim())
+        input.rolling_period_days = Number(rollingPeriodDays)
+      if (lifetimeBudget.trim()) input.lifetime_budget = Number(lifetimeBudget)
+      if (expiresAt.trim()) {
+        input.expires_at = new Date(expiresAt + 'T23:59:59Z').toISOString()
+      }
+      await updateDefaults.mutateAsync({ id: costCentre.id, input })
+      setSuccess(true)
+    } catch {
+      setError('Unable to save defaults.')
+    }
+  }
+
+  return (
+    <form className="form form--inline" onSubmit={handleSubmit}>
+      <h3 className="form__title">
+        Request defaults — {costCentre.code}
+      </h3>
+
+      <fieldset className="approve-panel__fieldset">
+        <legend className="approve-panel__legend">Default allowed models</legend>
+        {DEFAULT_MODEL_OPTIONS.map((model) => (
+          <label key={model} className="approve-panel__model-row">
+            <input
+              type="checkbox"
+              checked={selectedModels.has(model)}
+              onChange={() => toggleModel(model)}
+            />
+            {model}
+          </label>
+        ))}
+      </fieldset>
+
+      <div className="form__row">
+        <label className="form__field">
+          <span>Rolling limit (AUD)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={rollingLimit}
+            onChange={(e) => setRollingLimit(e.target.value)}
+            placeholder="Global default"
+          />
+        </label>
+        <label className="form__field">
+          <span>Rolling period (days)</span>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={rollingPeriodDays}
+            onChange={(e) => setRollingPeriodDays(e.target.value)}
+            placeholder="Global default"
+          />
+        </label>
+      </div>
+      <div className="form__row">
+        <label className="form__field">
+          <span>Lifetime budget (AUD)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={lifetimeBudget}
+            onChange={(e) => setLifetimeBudget(e.target.value)}
+            placeholder="Global default"
+          />
+        </label>
+        <label className="form__field">
+          <span>Project end date</span>
+          <input
+            type="date"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {error && (
+        <p className="status status--error" role="alert">
+          {error}
+        </p>
+      )}
+      {success && (
+        <p className="status status--ok">Defaults saved.</p>
+      )}
+
+      <div className="form__row">
+        <button type="submit" disabled={updateDefaults.isPending}>
+          {updateDefaults.isPending ? 'Saving…' : 'Save defaults'}
+        </button>
+        <button type="button" className="btn" onClick={onDone}>
+          Close
+        </button>
+      </div>
+    </form>
   )
 }

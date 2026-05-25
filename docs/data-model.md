@@ -46,6 +46,7 @@ erDiagram
         string description
         string status
         decimal budget_cap
+        jsonb request_defaults
         timestamp created_at
         timestamp updated_at
         uuid created_by FK
@@ -218,6 +219,7 @@ Organisational budget unit. Represents a project, team, or department that owns 
 | `description` | `TEXT` | NULL | Optional description |
 | `status` | `VARCHAR(20)` | NOT NULL, default `'active'` | `active`, `archived` |
 | `budget_cap` | `DECIMAL(12,2)` | NULL | Total dollar cap across all keys in this cost centre. NULL = no cap. |
+| `request_defaults` | `JSONB` | NULL | Default constraints for new key requests. Fields: `allowed_models` (string[]), `rolling_limit` (decimal), `rolling_period_days` (integer), `lifetime_budget` (decimal), `expires_at` (ISO 8601 date — hard project end date). All fields optional; unset fields fall back to global settings. |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL, default `NOW()` | |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL, default `NOW()` | |
 | `created_by` | `UUID` | FK → `users.id`, NOT NULL | Admin who created it |

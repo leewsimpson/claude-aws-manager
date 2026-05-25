@@ -557,6 +557,55 @@
 }
 
 /* ===========================================================================
+   Test-mode persona quick-login (login card, PoC only)
+   =========================================================================== */
+
+.personas {
+  margin-top: 1.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.personas__label {
+  margin: 0 0 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  color: var(--text-faint);
+}
+
+.personas__list {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.personas__btn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  text-align: left;
+}
+
+.personas__name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.personas__meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.personas__btn:hover:not(:disabled) .personas__meta {
+  color: var(--accent);
+}
+
+/* ===========================================================================
    Inline forms (authenticated, left-aligned)
    =========================================================================== */
 

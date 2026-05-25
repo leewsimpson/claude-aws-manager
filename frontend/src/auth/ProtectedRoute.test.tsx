@@ -36,4 +36,26 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('Protected content')).toBeInTheDocument(),
     )
   })
+
+  it('redirects to the role home when the user lacks a required role', async () => {
+    // TEST_TOKEN restores a developer; an admin-only route should bounce them
+    // to their role home (/keys).
+    localStorage.setItem('cam.token', TEST_TOKEN)
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/usage"
+          element={
+            <ProtectedRoute requireRoles={['admin']}>
+              <div>Admin only</div>
+            </ProtectedRoute>
+          }
+        />
+        <Route path="/keys" element={<div>Keys home</div>} />
+      </Routes>,
+      { initialEntries: ['/usage'] },
+    )
+    await waitFor(() => expect(screen.getByText('Keys home')).toBeInTheDocument())
+    expect(screen.queryByText('Admin only')).not.toBeInTheDocument()
+  })
 })

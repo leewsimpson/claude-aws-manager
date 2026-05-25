@@ -42,3 +42,4 @@ class KeyConstraintsUpdate(BaseModel):
     rolling_period_days: int | None = Field(default=None, ge=1)
     lifetime_budget: float | None = Field(default=None, ge=0)
     expiry_days: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None

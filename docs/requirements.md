@@ -56,6 +56,11 @@ A cost centre can have **multiple Cost Centre Owners** (e.g., a team lead and a 
   - Total token budget for the key's lifetime
   - Which models the key can access (e.g., Sonnet only, no Opus)
   - Key expiration duration
+- **Configures request defaults** for their cost centre(s):
+  - Default allowed models, rolling limit, rolling period, lifetime budget, and expiry date
+  - Expiry date is a **hard date** representing the project end — not a relative duration
+  - Defaults pre-populate the approval form; the CCO can still override per request
+  - Admins can also set/edit these defaults
 - Can modify constraints on existing active keys
 - Can revoke keys for developers in their cost centre
 - Manages the overall cost centre budget (total cap across all keys in the cost centre)
@@ -105,7 +110,7 @@ A cost centre can have **multiple Cost Centre Owners** (e.g., a team lead and a 
 - Token limit over a configurable rolling period (number of days, e.g., 50k tokens over 7 days)
 - Total token budget for the key's lifetime
 - Allowed models (e.g., Sonnet and Haiku only)
-- Expiration duration (e.g., 90 days)
+- Expiry date — defaults to the cost centre's project end date; editable by CCO per key
 - Once the rolling period limit is reached, **key is stopped** until sufficient tokens become available as older usage falls outside the rolling window
 - Usage tracked and attributed to the cost centre
 - Cost centre-level budget applies across all keys in the cost centre
@@ -154,10 +159,18 @@ A cost centre can have **multiple Cost Centre Owners** (e.g., a team lead and a 
 
 #### 3.3.1 Approval & Key Configuration
 - View pending key requests for their cost centre(s)
-- Approve with constraints (set per-key limits: token limit over rolling period, total budget, models, expiry)
+- Approve with constraints (set per-key limits: token limit over rolling period, total budget, models, expiry date)
 - Reject with reason
 - Modify constraints on existing active keys (e.g., increase/decrease limits)
 - Revoke keys for developers in their cost centre
+
+#### 3.3.1a Request Defaults
+- **Configure request defaults** for each cost centre — pre-populated values applied to every new approval
+- Default fields: allowed models, rolling limit (AUD), rolling period (days), lifetime budget (AUD), expiry date
+- **Expiry date is a hard date** (project end date), not a relative number of days
+- Defaults are applied at approval/auto-approval time; the CCO can override any field per request
+- Admins can also view and edit a cost centre's request defaults
+- Changes to defaults are audit-logged
 
 #### 3.3.2 Cost Centre Usage View (scoped to their cost centre(s) only)
 - **Developer activity table**: who has keys, last active, status, current usage vs limits

@@ -81,6 +81,7 @@ function seed(): CostCentre[] {
       description: 'Engineering teams',
       status: 'active',
       budget_cap: 5000,
+      request_defaults: null,
       created_by: 'u-admin',
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
@@ -100,6 +101,7 @@ function seed(): CostCentre[] {
       description: null,
       status: 'active',
       budget_cap: null,
+      request_defaults: null,
       created_by: 'u-admin',
       created_at: '2026-01-02T00:00:00Z',
       updated_at: '2026-01-02T00:00:00Z',
@@ -355,6 +357,7 @@ export const handlers = [
       description: body.description ?? null,
       status: 'active',
       budget_cap: body.budget_cap ?? null,
+      request_defaults: null,
       created_by: 'u-admin',
       created_at: now,
       updated_at: now,
@@ -504,7 +507,7 @@ export const handlers = [
       reviewed_by: autoApprove ? userId : null,
       reviewed_at: autoApprove ? now : null,
       approved_constraints: autoApprove
-        ? { allowed_models: ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5'], rolling_limit: null, rolling_period_days: null, lifetime_budget: null, expiry_days: null }
+        ? { allowed_models: ['anthropic.claude-sonnet-4-6', 'anthropic.claude-haiku-4-5'], rolling_limit: null, rolling_period_days: null, lifetime_budget: null, expiry_days: null, expires_at: null }
         : null,
       created_at: now,
       updated_at: now,
@@ -543,6 +546,7 @@ export const handlers = [
       rolling_period_days: body.rolling_period_days ?? null,
       lifetime_budget: body.lifetime_budget ?? null,
       expiry_days: body.expiry_days ?? null,
+      expires_at: null,
     }
     req.updated_at = now
 

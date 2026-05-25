@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { ApiError } from '../lib/api'
 import { useCostCentres } from '../features/costCentres/api'
@@ -303,17 +303,43 @@ function ApprovePanel({
   onProvisioned: (key: ProvisionedKey) => void
 }) {
   const approve = useApproveKeyRequest()
+  const { data: costCentres } = useCostCentres()
 
-  // Model checkboxes — default all selected to avoid accidentally sending an
-  // empty list and triggering backend defaults unexpectedly.
-  const [selectedModels, setSelectedModels] = useState<Set<string>>(
-    new Set(DEFAULT_MODEL_OPTIONS),
+  // Look up CC defaults for this request's cost centre
+  const cc = (costCentres ?? []).find(
+    (c) => String(c.id) === String(request.cost_centre_id),
   )
-  const [rollingLimit, setRollingLimit] = useState('')
-  const [rollingPeriodDays, setRollingPeriodDays] = useState('')
-  const [lifetimeBudget, setLifetimeBudget] = useState('')
-  const [expiryDays, setExpiryDays] = useState('')
+  const defaults = cc?.request_defaults
+
+  // Model checkboxes — pre-fill from CC defaults, then fallback to all selected
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(
+    new Set(defaults?.allowed_models ?? DEFAULT_MODEL_OPTIONS),
+  )
+  const [rollingLimit, setRollingLimit] = useState(
+    defaults?.rolling_limit != null ? String(defaults.rolling_limit) : '',
+  )
+  const [rollingPeriodDays, setRollingPeriodDays] = useState(
+    defaults?.rolling_period_days != null
+      ? String(defaults.rolling_period_days)
+      : '',
+  )
+  const [lifetimeBudget, setLifetimeBudget] = useState(
+    defaults?.lifetime_budget != null ? String(defaults.lifetime_budget) : '',
+  )
+  const [expiresAt, setExpiresAt] = useState(
+    defaults?.expires_at ? defaults.expires_at.slice(0, 10) : '',
+  )
   const [error, setError] = useState<string | null>(null)
+
+  // Re-populate when cost centres load (may arrive after first render)
+  useEffect(() => {
+    if (!defaults) return
+    if (defaults.allowed_models) setSelectedModels(new Set(defaults.allowed_models))
+    if (defaults.rolling_limit != null) setRollingLimit(String(defaults.rolling_limit))
+    if (defaults.rolling_period_days != null) setRollingPeriodDays(String(defaults.rolling_period_days))
+    if (defaults.lifetime_budget != null) setLifetimeBudget(String(defaults.lifetime_budget))
+    if (defaults.expires_at) setExpiresAt(defaults.expires_at.slice(0, 10))
+  }, [defaults])
 
   function toggleModel(model: string) {
     setSelectedModels((prev) => {
@@ -331,23 +357,21 @@ function ApprovePanel({
     event.preventDefault()
     setError(null)
     try {
+      const input: Record<string, unknown> = {}
+      if (selectedModels.size > 0) {
+        input.allowed_models = Array.from(selectedModels)
+      }
+      if (rollingLimit.trim()) input.rolling_limit = Number(rollingLimit)
+      if (rollingPeriodDays.trim()) input.rolling_period_days = Number(rollingPeriodDays)
+      if (lifetimeBudget.trim()) input.lifetime_budget = Number(lifetimeBudget)
+      if (expiresAt.trim()) {
+        input.expires_at = new Date(expiresAt + 'T23:59:59Z').toISOString()
+      }
+
       const result = await approve.mutateAsync({
         id: request.id,
-        input: {
-          // Omit allowed_models if none selected — backend applies defaults.
-          ...(selectedModels.size > 0 && {
-            allowed_models: Array.from(selectedModels),
-          }),
-          ...(rollingLimit.trim() && { rolling_limit: Number(rollingLimit) }),
-          ...(rollingPeriodDays.trim() && {
-            rolling_period_days: Number(rollingPeriodDays),
-          }),
-          ...(lifetimeBudget.trim() && { lifetime_budget: Number(lifetimeBudget) }),
-          ...(expiryDays.trim() && { expiry_days: Number(expiryDays) }),
-        },
+        input,
       })
-      // Approve is contractually required to return a key. If it doesn't,
-      // surface an error rather than silently closing the panel.
       if (result.key) {
         onProvisioned(result.key)
       } else {
@@ -389,7 +413,7 @@ function ApprovePanel({
             step="0.01"
             value={rollingLimit}
             onChange={(e) => setRollingLimit(e.target.value)}
-            placeholder="Leave blank for none"
+            placeholder="Leave blank for global default"
           />
         </label>
         <label className="form__field">
@@ -400,7 +424,7 @@ function ApprovePanel({
             step="1"
             value={rollingPeriodDays}
             onChange={(e) => setRollingPeriodDays(e.target.value)}
-            placeholder="Leave blank for none"
+            placeholder="Leave blank for global default"
           />
         </label>
       </div>
@@ -413,18 +437,15 @@ function ApprovePanel({
             step="0.01"
             value={lifetimeBudget}
             onChange={(e) => setLifetimeBudget(e.target.value)}
-            placeholder="Leave blank for none"
+            placeholder="Leave blank for global default"
           />
         </label>
         <label className="form__field">
-          <span>Key expiry (days from now)</span>
+          <span>Key expiry date</span>
           <input
-            type="number"
-            min="1"
-            step="1"
-            value={expiryDays}
-            onChange={(e) => setExpiryDays(e.target.value)}
-            placeholder="Leave blank for none"
+            type="date"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
           />
         </label>
       </div>
