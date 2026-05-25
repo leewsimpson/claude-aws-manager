@@ -799,12 +799,127 @@ a { color: var(--accent); text-decoration: none; }
 }
 
 /* ============================================================
+   PROBLEM
+   ============================================================ */
+.problems {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.4rem;
+}
+.problem {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  padding: 1.6rem 1.5rem 1.7rem;
+  position: relative;
+}
+.problem__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--danger);
+  margin-bottom: 0.8rem;
+}
+.problem__tag::before {
+  content: '!';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--danger);
+  font-size: 0.6rem;
+}
+.problem h3 {
+  font-family: var(--font-mono);
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.01em;
+}
+.problem p { margin: 0; color: var(--text-muted); font-size: 0.92rem; line-height: 1.6; }
+
+/* ============================================================
+   PERSONAS
+   ============================================================ */
+.personas {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.4rem;
+}
+.persona {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--bg-elev) 0%, var(--bg-inset) 100%);
+  padding: 1.9rem 1.7rem 2rem;
+  position: relative;
+  overflow: hidden;
+  transition: border-color .2s ease, transform .2s ease;
+}
+.persona::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+.persona:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+.persona__role {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.9rem;
+}
+.persona__quote {
+  font-family: var(--font-mono);
+  font-size: 1.12rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.9rem;
+  color: var(--text);
+}
+.persona__lede {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin: 0 0 1.4rem;
+  line-height: 1.6;
+}
+.persona__list { list-style: none; padding: 0; margin: auto 0 0; display: flex; flex-direction: column; gap: 0.7rem; }
+.persona__list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  align-items: baseline;
+}
+.persona__list li::before {
+  content: '✓';
+  color: var(--ok);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+.persona__list b { color: var(--text); font-weight: 600; }
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 1080px) {
   .hero { grid-template-columns: 1fr; padding: 4rem 1.4rem 2.5rem; gap: 2.5rem; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .features { grid-template-columns: repeat(2, 1fr); }
+  .problems { grid-template-columns: 1fr; }
+  .personas { grid-template-columns: 1fr; }
   .flow { grid-template-columns: repeat(2, 1fr); }
   .flow__step::after { display: none; }
   .arch { grid-template-columns: 1fr; gap: 1.6rem; }
@@ -834,10 +949,11 @@ a { color: var(--accent); text-decoration: none; }
 <header class="nav">
   <div class="nav__brand">Claude Code AWS Bedrock Manager</div>
   <nav class="nav__links">
+    <a class="nav__link" href="#problem">The problem</a>
+    <a class="nav__link" href="#personas">Who it's for</a>
     <a class="nav__link" href="#features">Features</a>
     <a class="nav__link" href="#flow">How it works</a>
     <a class="nav__link" href="#showcase">Screenshots</a>
-    <a class="nav__link" href="#architecture">Architecture</a>
   </nav>
   <a class="nav__cta" href="https://github.com/leewsimpson/claude-aws-manager" target="_blank" rel="noopener">
     <span>★</span><span>github / leewsimpson / claude-aws-manager</span>
@@ -855,10 +971,10 @@ a { color: var(--accent); text-decoration: none; }
       <span class="accent">Claude Code</span> on AWS Bedrock<span class="cursor"></span>
     </h1>
     <p class="hero__lead">
-      Provision and govern <strong>Bedrock API keys</strong> for every developer in your org —
-      with cost-centre ownership, model allow-lists at the IAM layer, and budget enforcement
-      that <strong>hard-stops</strong> a key the moment it crosses a rolling, lifetime, or CC budget.
-      The platform never sits in the inference path.
+      Put Claude Code in every developer's hands <strong>in seconds</strong> — and keep a hard hand on the spend.
+      Owners approve access with budgets and model limits; a background poller <strong>hard-stops</strong> any key
+      the moment it crosses a rolling, lifetime, or cost-centre cap. Self-service speed, automatic governance —
+      and the platform <strong>never sits in the inference path</strong>.
     </p>
     <div class="hero__cta">
       <a class="btn-primary" href="https://github.com/leewsimpson/claude-aws-manager" target="_blank" rel="noopener">
@@ -914,11 +1030,95 @@ a { color: var(--accent); text-decoration: none; }
 </section>
 
 <!-- =====================================================
+     PROBLEM
+     ===================================================== -->
+<section class="section" id="problem">
+  <div class="section__head">
+    <div class="section__eyebrow">01 — The problem</div>
+    <h2>"Give everyone Claude Code" and "control the spend" pull in opposite directions.</h2>
+    <p class="section__lead">
+      Handing a team an AI coding agent is the easy part. Keeping it fast <em>and</em> governed is where most
+      rollouts quietly come apart — and it lands on three different desks.
+    </p>
+  </div>
+
+  <div class="problems">
+    <div class="problem">
+      <div class="problem__tag">Friction</div>
+      <h3>Provisioning is a bottleneck</h3>
+      <p>Hand-cut IAM users, credentials, and policies per developer — slow to issue, easy to get wrong, and rarely cleaned up when someone moves on.</p>
+    </div>
+    <div class="problem">
+      <div class="problem__tag">Blind spend</div>
+      <h3>The bill arrives a month late</h3>
+      <p>A runaway agent loop can burn a budget overnight. Cost Explorer tells you weeks later — by which point the attribution to a team or project is already lost.</p>
+    </div>
+    <div class="problem">
+      <div class="problem__tag">Exposure</div>
+      <h3>Secrets sprawl, models go unchecked</h3>
+      <p>Bearer tokens get pasted into Slack and spreadsheets, and nothing stops a key reaching for the most expensive model on every single call.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =====================================================
+     PERSONAS
+     ===================================================== -->
+<section class="section" id="personas" style="padding-top:1rem;">
+  <div class="section__head">
+    <div class="section__eyebrow">02 — Who it's for</div>
+    <h2>One platform, three jobs to do.</h2>
+    <p class="section__lead">
+      A user can wear more than one hat — a cost-centre owner is often a developer too. Each role gets exactly
+      the surface it needs, and nothing it doesn't.
+    </p>
+  </div>
+
+  <div class="personas">
+    <article class="persona">
+      <div class="persona__role">Developer</div>
+      <p class="persona__quote">"I just need a working key — now, not next sprint."</p>
+      <p class="persona__lede">No infrastructure to learn, no ticket to chase. Request it, retrieve it, and you're coding against Bedrock.</p>
+      <ul class="persona__list">
+        <li><span><b>Self-service requests</b> against any cost centre — no IT ticket, no waiting.</span></li>
+        <li><span><b>Retrieve your token once</b>, straight into Claude Code. Lost it? Regenerate.</span></li>
+        <li><span>See your <b>own spend</b> — and if a key stops, exactly <b>when it comes back</b>.</span></li>
+        <li><span>Hold keys across several cost centres; <b>self-deactivate</b> when you're done.</span></li>
+      </ul>
+    </article>
+
+    <article class="persona">
+      <div class="persona__role">Cost Centre Owner</div>
+      <p class="persona__quote">"It's my budget on the line — I decide who spends it."</p>
+      <p class="persona__lede">Approve access with guardrails and watch the spend in real time, not in arrears.</p>
+      <ul class="persona__list">
+        <li><span><b>Approve with constraints</b> — allowed models, rolling limit, lifetime budget, hard expiry.</span></li>
+        <li><span>Set <b>request defaults</b> once; every approval form pre-fills from them.</span></li>
+        <li><span><b>Live spend</b> per developer and per model — not a month-late invoice.</span></li>
+        <li><span>A <b>hard stop</b> guards the budget automatically, then re-opens as the window clears.</span></li>
+      </ul>
+    </article>
+
+    <article class="persona">
+      <div class="persona__role">Administrator</div>
+      <p class="persona__quote">"Governance and security — without being the bottleneck."</p>
+      <p class="persona__lede">Org-wide oversight, policy, and an audit trail, while owners handle the day-to-day approving.</p>
+      <ul class="persona__list">
+        <li><span><b>Org-wide view</b> of every key, request, and dollar across all cost centres.</span></li>
+        <li><span>Model limits enforced at the <b>IAM layer</b> — not on trust.</span></li>
+        <li><span>Tokens <b>never stored</b>; every state change in an <b>append-only audit log</b>.</span></li>
+        <li><span><b>Approve anywhere</b> and set global policy — but let owners carry the load.</span></li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<!-- =====================================================
      FEATURES
      ===================================================== -->
 <section class="section" id="features">
   <div class="section__head">
-    <div class="section__eyebrow">01 — Capabilities</div>
+    <div class="section__eyebrow">03 — Capabilities</div>
     <h2>Govern access without becoming a bottleneck.</h2>
     <p class="section__lead">
       Everything an organisation needs to put Claude Code in developers' hands today —
@@ -997,7 +1197,7 @@ a { color: var(--accent); text-decoration: none; }
      ===================================================== -->
 <section class="section" id="flow" style="padding-top:1rem;">
   <div class="section__head">
-    <div class="section__eyebrow">02 — How it works</div>
+    <div class="section__eyebrow">04 — How it works</div>
     <h2>From request to revoked, in one append-only timeline.</h2>
   </div>
   <div class="flow">
@@ -1029,7 +1229,7 @@ a { color: var(--accent); text-decoration: none; }
      ===================================================== -->
 <section class="section showcase" id="showcase">
   <div class="section__head">
-    <div class="section__eyebrow">03 — The Console</div>
+    <div class="section__eyebrow">05 — The Console</div>
     <h2>The Bedrock Control Room, in nine frames.</h2>
     <p class="section__lead">
       Dark-only, dense, mono-typographic — built for the operators who actually have to read it at 4pm on a Friday.
@@ -1069,7 +1269,7 @@ a { color: var(--accent); text-decoration: none; }
      ===================================================== -->
 <section class="section" id="architecture">
   <div class="section__head">
-    <div class="section__eyebrow">04 — Architecture</div>
+    <div class="section__eyebrow">06 — Architecture</div>
     <h2>Boring stack. Sharp boundaries.</h2>
     <p class="section__lead">
       FastAPI + Postgres + React. Bedrock as the credential plane. CloudWatch as the meter. The platform stays out of the inference path on purpose.
