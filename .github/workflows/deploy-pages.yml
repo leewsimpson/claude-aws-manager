@@ -38,7 +38,7 @@ jobs:
           if '<html' not in src or '</html>' not in src:
             print('❌ Missing html tags')
             sys.exit(1)
-          print(f'✓ HTML valid ({len(src)} bytes, {len(pathlib.Path("landing/screenshots").glob("*.png"))} screenshots)')
+          print(f'✓ HTML valid ({len(src)} bytes, {len(list(pathlib.Path("landing/screenshots").glob("*.png")))} screenshots)')
           VALIDATE
 
       - name: Setup Pages
